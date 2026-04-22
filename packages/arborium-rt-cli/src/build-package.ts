@@ -198,16 +198,9 @@ ${displayName} grammar for [\`@appellation/arborium-rt\`](https://github.com/app
 
 \`\`\`ts
 import { loadArboriumRuntime } from '@appellation/arborium-rt';
-import hostModuleFactory from '@appellation/arborium-rt/host-module';
 import ${lang}Grammar from '@appellation/arborium-rt-${lang}';
 
-const runtime = await loadArboriumRuntime({
-    hostModuleFactory,
-    runtimeWasm: fetch(
-        new URL('@appellation/arborium-rt/runtime-wasm', import.meta.url),
-    ),
-});
-
+const runtime = await loadArboriumRuntime();
 const grammar = await runtime.loadGrammar(${lang}Grammar);
 const session = grammar.createSession();
 session.setText('...');

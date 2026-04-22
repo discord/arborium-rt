@@ -21,14 +21,8 @@ SIDE_MODULEs import) and `dist/runtime/arborium_emscripten_runtime.wasm`.
 
 ```ts
 import { loadArboriumRuntime } from '@appellation/arborium-rt';
-import hostModuleFactory from '@appellation/arborium-rt/host-module';
 
-const runtime = await loadArboriumRuntime({
-    hostModuleFactory,
-    runtimeWasm: fetch(
-        new URL('@appellation/arborium-rt/runtime-wasm', import.meta.url),
-    ),
-});
+const runtime = await loadArboriumRuntime();
 
 const grammar = await runtime.loadGrammar({
     wasm: fetch('https://.../tree-sitter-rust.wasm'),
@@ -44,9 +38,15 @@ session.free();
 grammar.unregister();
 ```
 
-`wasm` / `runtimeWasm` accept anything fetchable: `ArrayBuffer`, `Uint8Array`,
-`Response`, or a `Promise` of any of those — use whatever your environment
-makes easy.
+`loadArboriumRuntime()` takes no arguments — the MAIN_MODULE host and the
+arborium-rt SIDE_MODULE ship inside the package (`dist/host/` and
+`dist/runtime/`) and are loaded relative to the module's own URL. Bundlers
+(Vite, webpack, esbuild) trace those specifiers so the wasm assets are
+copied automatically into the consumer's build.
+
+`wasm` on `loadGrammar` accepts anything fetchable: `ArrayBuffer`,
+`Uint8Array`, `Response`, `URL`, or a `Promise` of any of those — use
+whatever your environment makes easy.
 
 ## API shape
 
@@ -96,13 +96,6 @@ do so.
 This package also ships the `arborium-rt` dev CLI (`bin` entry in
 `package.json`) used to build grammars + generate these packages. See
 the repo root for commands: `./scripts/arborium-rt --help`.
-
-## Versioning
-
-The package's major version tracks the runtime's ABI
-(`arborium_rt_abi_version()`). `loadArboriumRuntime` throws
-`ArboriumError({ kind: 'abi-mismatch' })` if you pair a package with a runtime
-wasm from a different major version.
 
 ## License
 

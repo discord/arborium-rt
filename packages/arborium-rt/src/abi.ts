@@ -1,61 +1,40 @@
 // Low-level types + helpers for the arborium-rt ABI surface.
 //
 // Every `arborium_rt_*` symbol exported from the runtime SIDE_MODULE is
-// described here as a TypeScript function signature (ABI.runtime). Callers
+// described here as a TypeScript function signature (RuntimeAbi). Callers
 // shouldn't use these directly — the Runtime/Grammar/Session classes wrap
 // them — but the types are exported for consumers that need to bypass the
 // wrapper.
 
-/**
- * ABI version this package targets. Must match `ABI_VERSION` in src/lib.rs.
- *
- * History:
- * - v1 — initial: register/unregister grammar, sessions, parse.
- * - v2 — `arborium_rt_register_grammar` now takes a language name; added
- *         `arborium_rt_highlight_to_spans_utf16` and
- *         `arborium_rt_highlight_to_html`.
- */
-export const ABI_VERSION = 2;
+/// <reference types="emscripten" />
 
 /**
- * Minimal subset of the Emscripten MAIN_MODULE surface we rely on. The host
- * wasm built by `scripts/build-host-wasm.sh` ships all of these via
- * `EXPORTED_RUNTIME_METHODS` (see that script for the full list emcc keeps
- * alive).
+ * The MAIN_MODULE host surface. Extends the upstream `EmscriptenModule`
+ * interface with the two bits we rely on that aren't part of the base type:
  *
- * Intentionally not depending on `@types/emscripten` — the surface we use is
- * small and stable, and pinning it here keeps the type story self-contained.
+ * - `loadWebAssemblyModule` — MAIN_MODULE-specific loader that instantiates a
+ *   SIDE_MODULE wasm against the host's linear memory and returns its exports.
+ * - `getValue` — module-level runtime method exported via
+ *   `EXPORTED_RUNTIME_METHODS` (already declared as a global by
+ *   `@types/emscripten`; we pin it onto the module shape so call sites go
+ *   through `host.getValue(...)`).
  */
-export interface HostModule {
-    /** Load a SIDE_MODULE wasm into the host; returns its exports. */
+export interface HostModule extends EmscriptenModule {
     loadWebAssemblyModule(
-        binary: ArrayBuffer | Uint8Array | WebAssembly.Module,
+        binary: Uint8Array,
         options: { loadAsync: true },
     ): Promise<Record<string, (...args: number[]) => number | void>>;
-    /** Allocate `n` bytes in the shared linear heap. */
-    _malloc(size: number): number;
-    /** Free a pointer previously returned from `_malloc` / emscripten's allocator. */
-    _free(ptr: number): void;
-    /** View into the shared linear heap. */
-    HEAPU8: Uint8Array;
-    /** Read an `i32` at `ptr`. */
-    getValue(ptr: number, type: 'i32'): number;
-    /** Write an `i32` at `ptr`. */
-    setValue(ptr: number, value: number, type: 'i32'): void;
+    getValue: typeof getValue;
 }
 
 /** Factory produced by emscripten's `-sMODULARIZE -sEXPORT_ES6`. */
-export type HostModuleFactory = (
-    overrides?: Partial<HostModule>,
-) => Promise<HostModule>;
+export type HostModuleFactory = EmscriptenModuleFactory<HostModule>;
 
 /**
  * The raw C ABI the runtime SIDE_MODULE exposes. Each function is a plain
  * WebAssembly export — all pointers are `i32` offsets into the shared heap.
  */
 export interface RuntimeAbi {
-    /** Returns the ABI version the runtime was built against. */
-    arborium_rt_abi_version(): number;
     /**
      * Register a grammar. `language` is a `*const TSLanguage` returned by the
      * grammar module's `tree_sitter_<name>()` export. `name_ptr` / `name_len`
@@ -137,8 +116,6 @@ export class ArboriumError extends Error {
 }
 
 export type ArboriumErrorKind =
-    /** Runtime's `arborium_rt_abi_version()` didn't match the value this package targets. */
-    | 'abi-mismatch'
     /** `arborium_rt_register_grammar` returned 0 (query compile failure, bad language ptr, or empty name). */
     | 'grammar-registration-failed'
     /** `arborium_rt_create_session` returned 0 (unknown grammar id). */
@@ -181,39 +158,25 @@ export function readUtf8(module: HostModule, ptr: number, len: number): string {
     return decoder.decode(module.HEAPU8.subarray(ptr, ptr + len));
 }
 
-/**
- * A source for a SIDE_MODULE wasm. Accepts common wasm-loading shapes so
- * callers can `fetch()`, `fs.readFile()`, hand over a URL, or pass an
- * already-compiled `WebAssembly.Module`. `URL` and `Response` flow through
- * `WebAssembly.compileStreaming` inside {@link resolveWasm} (with `file:`
- * URLs falling back to `fs.readFile` under Node).
- */
-export type WasmSource =
-    | ArrayBuffer
-    | Uint8Array
-    | Response
-    | URL
-    | WebAssembly.Module
-    | Promise<ArrayBuffer | Uint8Array | Response | URL | WebAssembly.Module>;
+// ---------------------------------------------------------------------------
+// Wasm loading
+// ---------------------------------------------------------------------------
 
 /**
- * Resolve a {@link WasmSource} to something `loadWebAssemblyModule` accepts:
- * either raw bytes (caller handed us bytes) or a `WebAssembly.Module`
- * (streaming-compiled from a `Response` / `URL`, so compile overlaps the
- * download).
+ * A source for a SIDE_MODULE wasm. `URL` covers the common case — generated
+ * grammar packages emit `new URL('./tree-sitter-<lang>.wasm', import.meta.url)`
+ * — while the byte variants let callers pre-fetch or hand-assemble the buffer.
  */
-export async function resolveWasm(
-    source: WasmSource,
-): Promise<Uint8Array | WebAssembly.Module> {
-    const resolved = await source;
-    if (resolved instanceof WebAssembly.Module) return resolved;
-    if (resolved instanceof URL) return resolveUrl(resolved);
-    if (resolved instanceof Response) return compileResponse(resolved, resolved.url || 'wasm response');
-    if (resolved instanceof Uint8Array) return resolved;
-    return new Uint8Array(resolved);
+export type WasmSource = URL | ArrayBuffer | Uint8Array;
+
+/** Resolve a {@link WasmSource} to the bytes `loadWebAssemblyModule` expects. */
+export async function resolveWasm(source: WasmSource): Promise<Uint8Array> {
+    if (source instanceof URL) return fetchWasm(source);
+    if (source instanceof Uint8Array) return source;
+    return new Uint8Array(source);
 }
 
-async function resolveUrl(url: URL): Promise<Uint8Array | WebAssembly.Module> {
+async function fetchWasm(url: URL): Promise<Uint8Array> {
     if (url.protocol === 'file:') {
         // `fetch(file:)` is unsupported in Node's global fetch as of v22; the
         // generated grammar packages always emit `new URL('./x.wasm',
@@ -233,26 +196,7 @@ async function resolveUrl(url: URL): Promise<Uint8Array | WebAssembly.Module> {
             `failed to fetch ${url.href}: ${response.status} ${response.statusText}`,
         );
     }
-    return compileResponse(response, url.href);
-}
-
-async function compileResponse(
-    response: Response,
-    label: string,
-): Promise<WebAssembly.Module> {
-    try {
-        return await WebAssembly.compileStreaming(Promise.resolve(response));
-    } catch (err) {
-        // `compileStreaming` rejects if the body MIME type isn't
-        // `application/wasm`. The response body has already been consumed,
-        // so we can't fall back to a buffered compile here — surface the
-        // failure with context so the caller can fix the server config or
-        // pre-buffer themselves.
-        throw new ArboriumError(
-            'wasm-fetch-failed',
-            `WebAssembly.compileStreaming failed for ${label}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-    }
+    return new Uint8Array(await response.arrayBuffer());
 }
 
 const encoder = /* @__PURE__ */ new TextEncoder();

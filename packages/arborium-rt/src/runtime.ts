@@ -1,7 +1,6 @@
 // High-level wrapper classes over the arborium-rt ABI.
 
 import {
-    ABI_VERSION,
     ArboriumError,
     putUtf8,
     readUtf8,
@@ -18,40 +17,22 @@ import type {
     Utf16ParseResult,
 } from './types.js';
 
-/** Options for {@link loadArboriumRuntime}. */
-export interface LoadArboriumRuntimeOptions {
-    /**
-     * Factory produced by emscripten's MODULARIZE output. In this package, import
-     * it from `@appellation/arborium-rt/host-module`; in dev, import the built
-     * `target/host-wasm/web-tree-sitter.mjs` directly.
-     */
-    hostModuleFactory: HostModuleFactory;
-    /** Bytes of `arborium_emscripten_runtime.wasm` (SIDE_MODULE=2). */
-    runtimeWasm: WasmSource;
-    /** Optional overrides forwarded to the emscripten factory (e.g. `locateFile`). */
-    hostModuleOverrides?: Partial<HostModule>;
-}
-
 /**
- * Load the host wasm and the arborium-rt SIDE_MODULE into it. Verifies the ABI
- * version. Throws {@link ArboriumError} with `kind: 'abi-mismatch'` on
- * version skew.
+ * Load the host wasm and the arborium-rt SIDE_MODULE into it. Both assets ship
+ * inside this package (`dist/host/` and `dist/runtime/`) and are resolved
+ * relative to the compiled module — bundlers trace the specifiers, Node
+ * resolves them directly. Host + SIDE_MODULE are versioned together at
+ * publish time, so no runtime version check is performed.
  */
-export async function loadArboriumRuntime(
-    options: LoadArboriumRuntimeOptions,
-): Promise<Runtime> {
-    const host = await options.hostModuleFactory(options.hostModuleOverrides);
-    const runtimeBytes = await resolveWasm(options.runtimeWasm);
+export async function loadArboriumRuntime(): Promise<Runtime> {
+    const factory = await loadBundledHostModuleFactory();
+    const host = await factory();
+    const runtimeBytes = await resolveWasm(
+        new URL('./runtime/arborium_emscripten_runtime.wasm', import.meta.url),
+    );
     const abi = (await host.loadWebAssemblyModule(runtimeBytes, {
         loadAsync: true,
     })) as unknown as RuntimeAbi;
-    const actual = abi.arborium_rt_abi_version();
-    if (actual !== ABI_VERSION) {
-        throw new ArboriumError(
-            'abi-mismatch',
-            `arborium-rt ABI version mismatch: package targets ${ABI_VERSION}, runtime reports ${actual}`,
-        );
-    }
     return new Runtime(host, abi);
 }
 
@@ -396,6 +377,19 @@ export class Session {
 // ---------------------------------------------------------------------------
 // internals
 // ---------------------------------------------------------------------------
+
+/**
+ * Dynamically import the bundled host-module factory. Resolves relative to
+ * the compiled `dist/runtime.js`, so the sibling `dist/host/web-tree-sitter.mjs`
+ * (staged by `arborium-rt stage-dist`) is reached at runtime. Bundlers
+ * (Vite, webpack, esbuild) trace the literal specifier and ship the asset
+ * alongside the consumer's build.
+ */
+async function loadBundledHostModuleFactory(): Promise<HostModuleFactory> {
+    // @ts-expect-error — resolves from dist/ at runtime; no sibling exists under src/.
+    const mod = (await import('./host/web-tree-sitter.mjs')) as { default: HostModuleFactory };
+    return mod.default;
+}
 
 function pickLanguageExport(
     exports: Record<string, unknown>,

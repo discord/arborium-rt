@@ -1,9 +1,9 @@
 // End-to-end integration test for @appellation/arborium-rt.
 //
 // Mirrors scripts/harness.mjs (repo-root), but drives the typed API rather
-// than the raw ABI. Reads the three wasms + highlights.scm directly from
-// target/ so the test works in a fresh checkout after `cargo build` +
-// `build-host-wasm.sh` + `build-grammar.sh group-acorn json`.
+// than the raw ABI. Imports from `../dist/` so `loadArboriumRuntime()` can
+// find its bundled host + runtime siblings under `dist/host/` and
+// `dist/runtime/`. The `pretest` script builds + stages those assets.
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -11,16 +11,11 @@ import { dirname, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { loadArboriumRuntime } from '../src/index.js';
+import { loadArboriumRuntime } from '../dist/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..');
 
-const HOST_MJS = resolve(repoRoot, 'target/host-wasm/web-tree-sitter.mjs');
-const RUNTIME_WASM = resolve(
-    repoRoot,
-    'target/wasm32-unknown-emscripten/release/arborium_emscripten_runtime.wasm',
-);
 const JSON_GRAMMAR_WASM = resolve(
     repoRoot,
     'target/grammars/json/tree-sitter-json.wasm',
@@ -32,17 +27,12 @@ const JSON_HIGHLIGHTS_SCM = resolve(
 
 describe('loadArboriumRuntime + Grammar + Session', () => {
     it('parses JSON and emits number spans for literal digits', async () => {
-        const { default: hostModuleFactory } = await import(HOST_MJS);
-        const [runtimeWasm, grammarWasm, highlights] = await Promise.all([
-            readFile(RUNTIME_WASM),
+        const [grammarWasm, highlights] = await Promise.all([
             readFile(JSON_GRAMMAR_WASM),
             readFile(JSON_HIGHLIGHTS_SCM, 'utf8'),
         ]);
 
-        const runtime = await loadArboriumRuntime({
-            hostModuleFactory,
-            runtimeWasm,
-        });
+        const runtime = await loadArboriumRuntime();
         const grammar = await runtime.loadGrammar({
             languageId: 'json',
             wasm: grammarWasm,
@@ -67,13 +57,11 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
     });
 
     it('consumes a generated @appellation/arborium-rt-<lang> package end-to-end', async () => {
-        const { default: hostModuleFactory } = await import(HOST_MJS);
         const { default: jsonGrammarPackage } = await import(
             resolve(repoRoot, 'target/packages/json/index.js')
         );
-        const runtimeWasm = await readFile(RUNTIME_WASM);
 
-        const runtime = await loadArboriumRuntime({ hostModuleFactory, runtimeWasm });
+        const runtime = await loadArboriumRuntime();
         // The whole package is structurally a LoadGrammarOptions — no cherry-picking.
         const grammar = await runtime.loadGrammar(jsonGrammarPackage);
         const session = grammar.createSession();
@@ -92,14 +80,12 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
     });
 
     it('supports multiple sessions against the same grammar', async () => {
-        const { default: hostModuleFactory } = await import(HOST_MJS);
-        const [runtimeWasm, grammarWasm, highlights] = await Promise.all([
-            readFile(RUNTIME_WASM),
+        const [grammarWasm, highlights] = await Promise.all([
             readFile(JSON_GRAMMAR_WASM),
             readFile(JSON_HIGHLIGHTS_SCM, 'utf8'),
         ]);
 
-        const runtime = await loadArboriumRuntime({ hostModuleFactory, runtimeWasm });
+        const runtime = await loadArboriumRuntime();
         const grammar = await runtime.loadGrammar({
             languageId: 'json',
             wasm: grammarWasm,
@@ -124,14 +110,12 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
     });
 
     it('produces themed spans via the full highlight pipeline', async () => {
-        const { default: hostModuleFactory } = await import(HOST_MJS);
-        const [runtimeWasm, grammarWasm, highlights] = await Promise.all([
-            readFile(RUNTIME_WASM),
+        const [grammarWasm, highlights] = await Promise.all([
             readFile(JSON_GRAMMAR_WASM),
             readFile(JSON_HIGHLIGHTS_SCM, 'utf8'),
         ]);
 
-        const runtime = await loadArboriumRuntime({ hostModuleFactory, runtimeWasm });
+        const runtime = await loadArboriumRuntime();
         const grammar = await runtime.loadGrammar({
             languageId: 'json',
             wasm: grammarWasm,
@@ -156,14 +140,12 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
     });
 
     it('renders HTML via the full highlight pipeline', async () => {
-        const { default: hostModuleFactory } = await import(HOST_MJS);
-        const [runtimeWasm, grammarWasm, highlights] = await Promise.all([
-            readFile(RUNTIME_WASM),
+        const [grammarWasm, highlights] = await Promise.all([
             readFile(JSON_GRAMMAR_WASM),
             readFile(JSON_HIGHLIGHTS_SCM, 'utf8'),
         ]);
 
-        const runtime = await loadArboriumRuntime({ hostModuleFactory, runtimeWasm });
+        const runtime = await loadArboriumRuntime();
         const grammar = await runtime.loadGrammar({
             languageId: 'json',
             wasm: grammarWasm,

@@ -5,7 +5,6 @@ export {
     Runtime,
     Grammar,
     Session,
-    type LoadArboriumRuntimeOptions,
     type LoadGrammarOptions,
     type ArboriumGrammarPackage,
     type HighlightOptions,
@@ -13,7 +12,6 @@ export {
 } from './runtime.js';
 
 export {
-    ABI_VERSION,
     ArboriumError,
     type ArboriumErrorKind,
     type HostModule,
