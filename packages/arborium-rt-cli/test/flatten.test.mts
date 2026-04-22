@@ -11,11 +11,11 @@ import { dirname, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { buildGrammarIndex } from '../src/cli/arborium-yaml.js';
-import { flattenQuery } from '../src/cli/flatten.js';
+import { buildGrammarIndex } from '../src/arborium-yaml.js';
+import { flattenQuery } from '../src/flatten.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '..', '..');
+const repoRoot = resolve(here, '..', '..', '..');
 const langsRoot = resolve(repoRoot, 'third_party', 'arborium', 'langs');
 const index = buildGrammarIndex(langsRoot);
 

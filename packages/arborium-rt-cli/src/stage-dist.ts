@@ -1,5 +1,5 @@
-// Stage built wasms into js/dist/ so `npm pack` / `npm publish` include them
-// alongside the compiled TypeScript. Port of `js/scripts/copy-assets.sh`.
+// Stage built wasms into the runtime package's dist/ so `npm pack` /
+// `npm publish` include them alongside the compiled TypeScript.
 
 import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -23,7 +23,7 @@ export async function stageDist(): Promise<void> {
         );
     }
 
-    const distDir = join(p.jsDir, 'dist');
+    const distDir = join(p.runtimePackageDir, 'dist');
     const hostDest = join(distDir, 'host');
     const runtimeDest = join(distDir, 'runtime');
     mkdirSync(hostDest, { recursive: true });

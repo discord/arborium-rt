@@ -1,8 +1,9 @@
-// Publish the runtime + every built grammar package to a registry.
+// Publish the runtime + CLI + every built grammar package to a registry.
 //
 // Runtime goes first so the grammars' peerDependency constraint
 // (`@appellation/arborium-rt: ^<version>`) is satisfiable the moment a
-// grammar tarball is installed.
+// grammar tarball is installed. The CLI package is independent — it can
+// publish in any order.
 //
 // Auth is NOT handled here — rely on the user's `.npmrc` (or
 // `NODE_AUTH_TOKEN` env for GitHub Actions). For GitHub Packages, the
@@ -18,22 +19,22 @@ import { join, relative } from 'node:path';
 import { paths, run, step, warn } from './util.js';
 
 export interface PublishArgs {
-    /** If set, skip the runtime package (js/). */
+    /** If set, skip the runtime package (@appellation/arborium-rt). */
     skipRuntime?: boolean;
+    /** If set, skip the CLI package (@appellation/arborium-rt-cli). */
+    skipCli?: boolean;
     /** If set, skip all grammar packages (target/packages/*). */
     skipGrammars?: boolean;
     /** If set, only publish grammars matching these ids. */
     only?: string[];
     /**
-     * Registry URL. Defaults to GitHub Packages. If omitted *and* each
-     * package.json declares `publishConfig.registry`, npm uses that —
-     * leaving `registry` undefined here lets publishConfig win, which is
-     * the desired precedence.
+     * Registry URL. If omitted, each package.json's `publishConfig.registry`
+     * wins — which is the preferred path, since it's repo-committed.
      */
     registry?: string;
     /** npm dist-tag (default `latest`). */
     tag?: string;
-    /** Don't actually publish — run `npm publish --dry-run`. */
+    /** Don't actually publish — run `pnpm publish --dry-run`. */
     dryRun?: boolean;
     /**
      * Access level (`public` / `restricted`). GitHub Packages honors the
@@ -49,27 +50,30 @@ export interface PublishResult {
     readonly skipped: string[];
 }
 
+interface PublishJob {
+    readonly id: string;
+    readonly dir: string;
+    readonly packageName: string;
+}
+
 export async function publishAll(args: PublishArgs = {}): Promise<PublishResult> {
     const p = paths();
     const ok: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
     const skipped: string[] = [];
+    const jobs: PublishJob[] = [];
 
-    const jobs: Array<{ id: string; dir: string; packageName: string }> = [];
-
-    // Runtime job (if not skipped).
     if (!args.skipRuntime) {
-        const runtimePkgJson = join(p.jsDir, 'package.json');
+        const runtimePkgJson = join(p.runtimePackageDir, 'package.json');
         if (!existsSync(runtimePkgJson)) {
             throw new Error(`runtime package.json not found at ${runtimePkgJson}`);
         }
-        const runtimeDist = join(p.jsDir, 'dist');
+        const runtimeDist = join(p.runtimePackageDir, 'dist');
         if (!existsSync(runtimeDist)) {
             throw new Error(
-                `runtime not built: ${runtimeDist} missing. run \`npm run build\` in js/ first.`,
+                `runtime not built: ${runtimeDist} missing. run \`pnpm --filter @appellation/arborium-rt build\` first.`,
             );
         }
-        // Sanity: staged wasms must be present so the tarball actually works.
         for (const asset of [
             join(runtimeDist, 'host', 'web-tree-sitter.wasm'),
             join(runtimeDist, 'host', 'web-tree-sitter.mjs'),
@@ -83,12 +87,29 @@ export async function publishAll(args: PublishArgs = {}): Promise<PublishResult>
         }
         jobs.push({
             id: '<runtime>',
-            dir: p.jsDir,
+            dir: p.runtimePackageDir,
             packageName: readPackageName(runtimePkgJson),
         });
     }
 
-    // Grammar jobs.
+    if (!args.skipCli) {
+        const cliPkgJson = join(p.cliPackageDir, 'package.json');
+        if (!existsSync(cliPkgJson)) {
+            throw new Error(`CLI package.json not found at ${cliPkgJson}`);
+        }
+        const cliMain = join(p.cliPackageDir, 'dist', 'main.js');
+        if (!existsSync(cliMain)) {
+            throw new Error(
+                `CLI not built: ${cliMain} missing. run \`pnpm --filter @appellation/arborium-rt-cli build\` first.`,
+            );
+        }
+        jobs.push({
+            id: '<cli>',
+            dir: p.cliPackageDir,
+            packageName: readPackageName(cliPkgJson),
+        });
+    }
+
     if (!args.skipGrammars) {
         if (!existsSync(p.packagesOut)) {
             warn(
@@ -114,7 +135,6 @@ export async function publishAll(args: PublishArgs = {}): Promise<PublishResult>
                 }
                 jobs.push({ id, dir, packageName: readPackageName(pkgJson) });
             }
-            // If the caller filtered by --only, warn about ids that didn't match.
             if (wanted) {
                 const missing = [...wanted].filter(
                     (id) => !jobs.some((j) => j.id === id),
@@ -140,7 +160,7 @@ export async function publishAll(args: PublishArgs = {}): Promise<PublishResult>
             // Refuse to publish without a publishConfig.registry so a stale
             // package.json can't silently leak to the public npmjs registry.
             assertPublishConfig(job.dir);
-            await npmPublish(job.dir, args);
+            await pnpmPublish(job.dir, args);
             ok.push(job.id);
         } catch (e) {
             const reason = e instanceof Error ? e.message : String(e);
@@ -165,13 +185,16 @@ export async function publishAll(args: PublishArgs = {}): Promise<PublishResult>
     return { ok, failed, skipped };
 }
 
-async function npmPublish(dir: string, args: PublishArgs): Promise<void> {
+async function pnpmPublish(dir: string, args: PublishArgs): Promise<void> {
     const cliArgs: string[] = ['publish'];
     if (args.registry) cliArgs.push('--registry', args.registry);
     if (args.tag) cliArgs.push('--tag', args.tag);
     if (args.access) cliArgs.push('--access', args.access);
     if (args.dryRun) cliArgs.push('--dry-run');
-    await run('npm', cliArgs, { cwd: dir });
+    // pnpm refuses to publish with uncommitted changes by default; the caller
+    // controls when a release is ready, so opt out of that guard.
+    cliArgs.push('--no-git-checks');
+    await run('pnpm', cliArgs, { cwd: dir });
 }
 
 function readPackageName(pkgJsonPath: string): string {
@@ -182,7 +205,7 @@ function readPackageName(pkgJsonPath: string): string {
 
 /**
  * Refuse to publish a package that lacks `publishConfig.registry`. Without
- * it, `npm publish` falls back to the consumer's ambient registry — usually
+ * it, `pnpm publish` falls back to the consumer's ambient registry — usually
  * the public npmjs registry — which would leak a private package. If this
  * fires, the package was generated before build-package.ts learned to emit
  * publishConfig; run `arborium-rt package-all` to regenerate it.

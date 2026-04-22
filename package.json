@@ -1,0 +1,14 @@
+{
+  "name": "arborium-rt-workspace",
+  "private": true,
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "cli": "node packages/arborium-rt-cli/dist/main.js"
+  },
+  "packageManager": "pnpm@9.12.2"
+}

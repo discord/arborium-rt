@@ -42,7 +42,10 @@ export interface Paths {
     readonly packagesOut: string;
     readonly hostWasmOut: string;
     readonly runtimeWasm: string;
-    readonly jsDir: string;
+    /** `packages/arborium-rt/` — the runtime library package. */
+    readonly runtimePackageDir: string;
+    /** `packages/arborium-rt-cli/` — this CLI's own package. */
+    readonly cliPackageDir: string;
     readonly bindingRoot: string;
 }
 
@@ -64,7 +67,8 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
             'release',
             'arborium_emscripten_runtime.wasm',
         ),
-        jsDir: join(repoRoot, 'js'),
+        runtimePackageDir: join(repoRoot, 'packages', 'arborium-rt'),
+        cliPackageDir: join(repoRoot, 'packages', 'arborium-rt-cli'),
     };
 }
 

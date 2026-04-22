@@ -168,7 +168,7 @@ and a grammar wasm (a per-grammar SIDE_MODULE exporting
 cargo build --release                                # arborium_emscripten_runtime.wasm
 ./scripts/arborium-rt build-host                     # target/host-wasm/web-tree-sitter.{wasm,mjs}
 ./scripts/arborium-rt build group-acorn json         # build-grammar + package, in one
-cd js && npx vitest run                              # end-to-end parse test
+pnpm --filter @appellation/arborium-rt test          # end-to-end parse test
 ```
 
 `build-grammar` writes the flattened `.scm` query files alongside the
@@ -215,13 +215,16 @@ const grammar = await runtime.loadGrammar(jsonGrammar);
 
 ## JS consumer package
 
-A TypeScript wrapper over this ABI ships in [`js/`](./js) and publishes
-as `@appellation/arborium-rt`. It handles the three-module load dance, the
+A TypeScript wrapper over this ABI ships in
+[`packages/arborium-rt/`](./packages/arborium-rt) and publishes as
+`@appellation/arborium-rt`. It handles the three-module load dance, the
 shared-heap memory plumbing, and exposes a typed `Runtime` / `Grammar` /
-`Session` API. The same package also ships the `arborium-rt` dev CLI
-used throughout this README. See [js/README.md](./js/README.md) for
-consumer docs; run `cd js && npm install && npm run build && npm test`
-to build and verify locally.
+`Session` API. The `arborium-rt` dev CLI used throughout this README
+lives in [`packages/arborium-rt-cli/`](./packages/arborium-rt-cli) and
+publishes as `@appellation/arborium-rt-cli`. See
+[packages/arborium-rt/README.md](./packages/arborium-rt/README.md) for
+consumer docs; run `pnpm install && pnpm -r build && pnpm -r test` at the
+repo root to build and verify locally.
 
 ## Bumping the arborium submodule
 
@@ -251,7 +254,7 @@ doesn't keep alive through `-sEXPORTED_FUNCTIONS`:
 `./scripts/arborium-rt build-host` produces a compatible host by
 concatenating the upstream lists with the extra names arborium-rt needs.
 Both extras arrays are enumerated inline in
-[`js/src/cli/build-host.ts`](./js/src/cli/build-host.ts) and commented
+[`packages/arborium-rt-cli/src/build-host.ts`](./packages/arborium-rt-cli/src/build-host.ts) and commented
 with how they were discovered (`wasm-dis` on the runtime wasm). Until
 the deltas are upstreamed, that module is the source of truth.
 

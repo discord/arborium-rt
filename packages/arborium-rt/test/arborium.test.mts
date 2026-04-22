@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { loadArboriumRuntime } from '../src/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '..', '..');
+const repoRoot = resolve(here, '..', '..', '..');
 
 const HOST_MJS = resolve(repoRoot, 'target/host-wasm/web-tree-sitter.mjs');
 const RUNTIME_WASM = resolve(

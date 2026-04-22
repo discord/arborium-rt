@@ -11,9 +11,6 @@
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
-  "bin": {
-    "arborium-rt": "./dist/cli/main.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -27,11 +24,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc && node dist/cli/main.js stage-dist && chmod +x dist/cli/main.js",
-    "build:tsc-only": "tsc && chmod +x dist/cli/main.js",
-    "cli": "node dist/cli/main.js",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "build": "tsc",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
@@ -40,8 +34,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "dependencies": {
-    "yaml": "^2.8.3"
   }
 }
