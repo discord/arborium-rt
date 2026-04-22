@@ -29,10 +29,18 @@ of being baked into every grammar bundle.
 One running instance of the runtime serves many grammars via a
 registry keyed by grammar ID. Each grammar is registered by handing
 over its `*const TSLanguage` (from its side module's
-`tree_sitter_<lang>()` export) plus the three query strings
-(`highlights.scm`, `injections.scm`, `locals.scm`). Parse results are
-JSON-encoded `arborium_wire::Utf16ParseResult` delivered through
-shared linear memory.
+`tree_sitter_<lang>()` export), a language name (used to resolve
+`@injection.language` captures against other registered grammars),
+plus the three query strings (`highlights.scm`, `injections.scm`,
+`locals.scm`).
+
+The module offers two tiers of output: a raw parse
+(`arborium_rt_parse_utf16`) returning spans + injection points for
+consumers that want to render on their own, and a full highlight
+pipeline (`arborium_rt_highlight_to_spans_utf16` /
+`arborium_rt_highlight_to_html`) that handles recursive injection
+resolution, dedup, theming, and optional HTML rendering end-to-end in
+WASM. Both deliver their payloads through shared linear memory.
 
 See `src/abi.rs` for the full C ABI. Minimal JavaScript integration:
 
@@ -43,7 +51,7 @@ const Module = await MainModuleFactory();
 const runtime = await Module.loadWebAssemblyModule(
     await fetch('arborium_emscripten_runtime.wasm').then(r => r.arrayBuffer()),
     { loadAsync: true });
-if (runtime.arborium_rt_abi_version() !== 1)
+if (runtime.arborium_rt_abi_version() !== 2)
     throw new Error('arborium_rt ABI mismatch');
 
 const json = await Module.loadWebAssemblyModule(
@@ -57,11 +65,12 @@ function putStr(s) {
     Module.HEAPU8.set(bytes, p);
     return [p, bytes.length];
 }
+const [nPtr, nLen] = putStr('json');  // language name, used for injection lookups
 const [hPtr, hLen] = putStr(HIGHLIGHTS_SCM);
 const [iPtr, iLen] = putStr('');
 const [lPtr, lLen] = putStr('');
 const grammarId = runtime.arborium_rt_register_grammar(
-    langPtr, hPtr, hLen, iPtr, iLen, lPtr, lLen);
+    langPtr, nPtr, nLen, hPtr, hLen, iPtr, iLen, lPtr, lLen);
 
 const sessionId = runtime.arborium_rt_create_session(grammarId);
 const [tPtr, tLen] = putStr('[1, 2, 3]');
@@ -153,7 +162,8 @@ Verify exports:
 Expects: `arborium_rt_abi_version`, `arborium_rt_register_grammar`,
 `arborium_rt_unregister_grammar`, `arborium_rt_create_session`,
 `arborium_rt_free_session`, `arborium_rt_set_text`, `arborium_rt_cancel`,
-`arborium_rt_parse_utf16`, `arborium_rt_free`.
+`arborium_rt_parse_utf16`, `arborium_rt_highlight_to_spans_utf16`,
+`arborium_rt_highlight_to_html`, `arborium_rt_free`.
 
 ## Reproducing end-to-end
 
@@ -260,10 +270,18 @@ the deltas are upstreamed, that module is the source of truth.
 
 ## Stability
 
-The C ABI is versioned by `ABI_VERSION` (currently `1`) exposed via
+The C ABI is versioned by `ABI_VERSION` (currently `2`) exposed via
 `arborium_rt_abi_version()`. Consumers should call it right after
 `loadWebAssemblyModule` and refuse to proceed on mismatch. Increment
 on any breaking change.
+
+Version history:
+
+- **v1** — initial surface: register/unregister grammar, sessions, raw parse.
+- **v2** — `arborium_rt_register_grammar` gained a language-name parameter
+  (used for injection lookups); added `arborium_rt_highlight_to_spans_utf16`
+  and `arborium_rt_highlight_to_html` for full parse+highlight+render in
+  one call.
 
 ## License
 

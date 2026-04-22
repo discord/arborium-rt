@@ -6,8 +6,16 @@
 // them — but the types are exported for consumers that need to bypass the
 // wrapper.
 
-/** ABI version this package targets. Must match `ABI_VERSION` in src/lib.rs. */
-export const ABI_VERSION = 1;
+/**
+ * ABI version this package targets. Must match `ABI_VERSION` in src/lib.rs.
+ *
+ * History:
+ * - v1 — initial: register/unregister grammar, sessions, parse.
+ * - v2 — `arborium_rt_register_grammar` now takes a language name; added
+ *         `arborium_rt_highlight_to_spans_utf16` and
+ *         `arborium_rt_highlight_to_html`.
+ */
+export const ABI_VERSION = 2;
 
 /**
  * Minimal subset of the Emscripten MAIN_MODULE surface we rely on. The host
@@ -50,12 +58,16 @@ export interface RuntimeAbi {
     arborium_rt_abi_version(): number;
     /**
      * Register a grammar. `language` is a `*const TSLanguage` returned by the
-     * grammar module's `tree_sitter_<name>()` export. `*_ptr` / `*_len`
-     * describe UTF-8 query strings in shared memory (use 0/0 for unused).
-     * Returns a non-zero grammar id on success, 0 on failure.
+     * grammar module's `tree_sitter_<name>()` export. `name_ptr` / `name_len`
+     * describe the language name (used for injection lookups — must be
+     * non-empty). `*_ptr` / `*_len` for queries describe UTF-8 strings in
+     * shared memory (use 0/0 for unused). Returns a non-zero grammar id on
+     * success, 0 on failure.
      */
     arborium_rt_register_grammar(
         language: number,
+        name_ptr: number,
+        name_len: number,
         highlights_ptr: number,
         highlights_len: number,
         injections_ptr: number,
@@ -69,13 +81,41 @@ export interface RuntimeAbi {
     arborium_rt_set_text(session_id: number, text_ptr: number, text_len: number): void;
     arborium_rt_cancel(session_id: number): void;
     /**
-     * Parse and return a JSON-encoded `Utf16ParseResult` in shared memory.
-     * On success: writes ptr into `*out_ptr`, length into `*out_len`, returns 0.
-     * On failure: returns non-zero; outputs are untouched. Caller owns the
-     * returned buffer and must free via `arborium_rt_free(ptr, len)`.
+     * Raw parse. Writes a JSON-encoded `Utf16ParseResult` into shared memory;
+     * on success returns 0 and populates `*out_ptr` / `*out_len`. Caller
+     * owns the buffer and must free it via `arborium_rt_free`.
      */
     arborium_rt_parse_utf16(
         session_id: number,
+        out_ptr_slot: number,
+        out_len_slot: number,
+    ): number;
+    /**
+     * Full highlight pipeline: parse + recursive injection resolution +
+     * dedup + coalesce + theming. Writes a JSON-encoded
+     * `{ spans: ThemedSpan[] }` with UTF-16 offsets into shared memory.
+     * Caller owns the buffer and must free it via `arborium_rt_free`.
+     *
+     * `max_injection_depth` of 0 disables injection recursion (only the
+     * primary grammar's captures are returned).
+     */
+    arborium_rt_highlight_to_spans_utf16(
+        session_id: number,
+        max_injection_depth: number,
+        out_ptr_slot: number,
+        out_len_slot: number,
+    ): number;
+    /**
+     * Full highlight pipeline, rendered straight to HTML. `format` selects
+     * the markup style (see `HtmlFormat` in types.ts / `highlight.rs`).
+     * Caller owns the buffer and must free it via `arborium_rt_free`.
+     */
+    arborium_rt_highlight_to_html(
+        session_id: number,
+        max_injection_depth: number,
+        format: number,
+        prefix_ptr: number,
+        prefix_len: number,
         out_ptr_slot: number,
         out_len_slot: number,
     ): number;
@@ -99,12 +139,14 @@ export class ArboriumError extends Error {
 export type ArboriumErrorKind =
     /** Runtime's `arborium_rt_abi_version()` didn't match the value this package targets. */
     | 'abi-mismatch'
-    /** `arborium_rt_register_grammar` returned 0 (query compile failure or bad language ptr). */
+    /** `arborium_rt_register_grammar` returned 0 (query compile failure, bad language ptr, or empty name). */
     | 'grammar-registration-failed'
     /** `arborium_rt_create_session` returned 0 (unknown grammar id). */
     | 'session-creation-failed'
     /** `arborium_rt_parse_utf16` returned a non-zero status. */
     | 'parse-failed'
+    /** `arborium_rt_highlight_*` returned a non-zero status. */
+    | 'highlight-failed'
     /** Grammar SIDE_MODULE didn't export a `tree_sitter_*` function. */
     | 'grammar-language-export-missing'
     /** Couldn't resolve a `URL` WasmSource (fetch failed, or file read failed). */

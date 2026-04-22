@@ -44,6 +44,7 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
             runtimeWasm,
         });
         const grammar = await runtime.loadGrammar({
+            languageId: 'json',
             wasm: grammarWasm,
             highlights,
         });
@@ -99,7 +100,11 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
         ]);
 
         const runtime = await loadArboriumRuntime({ hostModuleFactory, runtimeWasm });
-        const grammar = await runtime.loadGrammar({ wasm: grammarWasm, highlights });
+        const grammar = await runtime.loadGrammar({
+            languageId: 'json',
+            wasm: grammarWasm,
+            highlights,
+        });
 
         const s1 = grammar.createSession();
         const s2 = grammar.createSession();
@@ -116,5 +121,69 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
         s1.free();
         s2.free();
         grammar.unregister();
+    });
+
+    it('produces themed spans via the full highlight pipeline', async () => {
+        const { default: hostModuleFactory } = await import(HOST_MJS);
+        const [runtimeWasm, grammarWasm, highlights] = await Promise.all([
+            readFile(RUNTIME_WASM),
+            readFile(JSON_GRAMMAR_WASM),
+            readFile(JSON_HIGHLIGHTS_SCM, 'utf8'),
+        ]);
+
+        const runtime = await loadArboriumRuntime({ hostModuleFactory, runtimeWasm });
+        const grammar = await runtime.loadGrammar({
+            languageId: 'json',
+            wasm: grammarWasm,
+            highlights,
+        });
+        const session = grammar.createSession();
+        try {
+            session.setText('[1, 2, 3]');
+            const spans = session.highlightToSpans();
+
+            // Numbers resolve to a single theme tag; the pipeline should
+            // return three non-empty spans, one per digit.
+            expect(spans).toHaveLength(3);
+            for (const span of spans) {
+                expect(span.end).toBeGreaterThan(span.start);
+                expect(span.tag.length).toBeGreaterThan(0);
+            }
+        } finally {
+            session.free();
+            grammar.unregister();
+        }
+    });
+
+    it('renders HTML via the full highlight pipeline', async () => {
+        const { default: hostModuleFactory } = await import(HOST_MJS);
+        const [runtimeWasm, grammarWasm, highlights] = await Promise.all([
+            readFile(RUNTIME_WASM),
+            readFile(JSON_GRAMMAR_WASM),
+            readFile(JSON_HIGHLIGHTS_SCM, 'utf8'),
+        ]);
+
+        const runtime = await loadArboriumRuntime({ hostModuleFactory, runtimeWasm });
+        const grammar = await runtime.loadGrammar({
+            languageId: 'json',
+            wasm: grammarWasm,
+            highlights,
+        });
+        const session = grammar.createSession();
+        try {
+            session.setText('{"x": 42}');
+
+            const customElements = session.highlightToHtml();
+            // Default format wraps captures in `<a-*>` tags. We assert only
+            // that the output contains at least one such tag; the exact tag
+            // depends on the theme-slot map which upstream owns.
+            expect(customElements).toMatch(/<a-[a-z]+>/);
+
+            const withClasses = session.highlightToHtml({ format: { kind: 'class-names' } });
+            expect(withClasses).toMatch(/<span class="[^"]+">/);
+        } finally {
+            session.free();
+            grammar.unregister();
+        }
     });
 });

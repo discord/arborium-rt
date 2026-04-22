@@ -12,6 +12,9 @@ crate-type = ["cdylib"]
 arborium-plugin-runtime = { path = "third_party/arborium/crates/arborium-plugin-runtime" }
 arborium-tree-sitter    = { path = "third_party/arborium/crates/arborium-tree-sitter" }
 arborium-wire           = { path = "third_party/arborium/crates/arborium-wire" }
+arborium-highlight      = { path = "third_party/arborium/crates/arborium-highlight", default-features = false }
+arborium-theme          = { path = "third_party/arborium/crates/arborium-theme", default-features = false }
+serde                   = { version = "1.0", default-features = false, features = ["derive", "std"] }
 serde_json              = { version = "1.0", default-features = false, features = ["std"] }
 
 [profile.release]

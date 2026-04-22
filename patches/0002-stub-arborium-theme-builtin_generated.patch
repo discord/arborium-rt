@@ -1,0 +1,45 @@
+From 6abeca120e71d32e06157d8405be16467aa6935d Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Wed, 22 Apr 2026 20:42:59 +0000
+Subject: [PATCH] Stub arborium-theme/builtin_generated.rs for WASM builds
+
+arborium-theme's `src/theme.rs` unconditionally includes
+`builtin_generated.rs` inside `pub mod builtin`. In upstream flow this
+file is produced by `cargo xtask gen` from the theme TOMLs; arborium-rt
+only needs `tag_for_capture` from `highlights.rs` and never touches
+`theme::builtin`, so a stub `all() -> Vec::new()` is enough to let
+`cargo check` / release builds succeed without running xtask.
+
+If builtin themes become reachable from non-test code upstream, replace
+this stub with the full generated output.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+---
+ crates/arborium-theme/src/builtin_generated.rs | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+ create mode 100644 crates/arborium-theme/src/builtin_generated.rs
+
+diff --git a/crates/arborium-theme/src/builtin_generated.rs b/crates/arborium-theme/src/builtin_generated.rs
+new file mode 100644
+index 0000000..4d4df8f
+--- /dev/null
++++ b/crates/arborium-theme/src/builtin_generated.rs
+@@ -0,0 +1,15 @@
++// Stub for arborium-rt WASM builds (no bundled themes).
++//
++// arborium-theme's `src/theme.rs` unconditionally does
++// `include!("builtin_generated.rs")` at module level inside `pub mod builtin`.
++// In the upstream flow this file is produced by `cargo xtask gen` from
++// `themes/*.toml`. The emscripten runtime only pulls in arborium-theme for
++// `tag_for_capture` / `tag_to_name` (from `highlights.rs`), so this empty
++// stub keeps the crate compilable without dragging the xtask theme
++// generator into the build.
++
++use super::Theme;
++
++pub fn all() -> Vec<Theme> {
++    Vec::new()
++}
+-- 
+2.34.1
+

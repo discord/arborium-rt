@@ -5,8 +5,20 @@
 //! `MAIN_MODULE=2` runtime via `Module.loadWebAssemblyModule`. One instance
 //! of this module serves many grammars concurrently: each grammar is
 //! registered with its language pointer + queries, sessions are created per
-//! grammar, and parse results are returned as JSON-encoded
-//! [`arborium_wire::Utf16ParseResult`] in shared WASM linear memory.
+//! grammar, and parse/highlight results are returned as JSON or rendered
+//! HTML in shared WASM linear memory.
+//!
+//! The module exposes two tiers of output:
+//!
+//! 1. **Raw parse** (`arborium_rt_parse_utf16`) — returns the primary
+//!    grammar's captures + injection points as JSON. Useful if the caller
+//!    wants to render/theme on its own.
+//! 2. **Full highlight pipeline** (`arborium_rt_highlight_*`) — runs parse
+//!    → recursive injection resolution → dedup/coalesce → theming, and
+//!    either returns themed spans with UTF-16 offsets or emits a fully
+//!    rendered HTML string. Injections are looked up by language name
+//!    against the registry, so every grammar registered for a language
+//!    that appears in an injection query needs to carry its language name.
 //!
 //! See `README.md` for build and integration instructions.
 //!
@@ -20,7 +32,13 @@
 //! changes in a breaking way.
 
 mod abi;
+mod highlight;
 mod registry;
 
 /// ABI version exposed via `arborium_rt_abi_version()`. Bump on breakage.
-pub const ABI_VERSION: u32 = 1;
+///
+/// * v1 — initial surface: register/unregister grammar, sessions, parse.
+/// * v2 — `arborium_rt_register_grammar` now takes a language name; added
+///         `arborium_rt_highlight_to_spans_utf16` and
+///         `arborium_rt_highlight_to_html`.
+pub const ABI_VERSION: u32 = 2;

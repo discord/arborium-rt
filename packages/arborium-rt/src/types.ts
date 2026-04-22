@@ -1,6 +1,7 @@
-// Wire types for arborium-rt. Mirrors third_party/arborium/crates/arborium-wire/src/lib.rs.
-// The runtime serializes Utf16ParseResult as JSON before handing it back through
-// shared linear memory; these types describe the shape after JSON.parse.
+// Wire types for arborium-rt. Mirrors third_party/arborium/crates/arborium-wire/src/lib.rs
+// plus the handful of arborium-rt-specific wire shapes defined in src/highlight.rs.
+// The runtime serializes these as JSON before handing them back through shared
+// linear memory; the interfaces below describe the shape after JSON.parse.
 
 /** A highlighted span with UTF-16 code-unit indices (suitable for JS string slice). */
 export interface Utf16Span {
@@ -30,11 +31,49 @@ export interface Utf16ParseResult {
 }
 
 /**
+ * A themed span emitted by the full highlight pipeline (parse + injection
+ * resolution + dedup + coalesce). Offsets are UTF-16 code units; the `tag`
+ * is the short theme slot string (`"k"`, `"f"`, `"s"`, …) matching the
+ * default `CustomElements` HTML format — map it to a longer class name via
+ * arborium-theme's `tag_to_name` if you want `"keyword"` / `"function"` /
+ * `"string"`.
+ */
+export interface ThemedSpan {
+    start: number;
+    end: number;
+    tag: string;
+}
+
+/** Wire shape of `arborium_rt_highlight_to_spans_utf16`'s JSON payload. */
+export interface ThemedHighlightResult {
+    spans: ThemedSpan[];
+}
+
+/**
+ * Output format for `arborium_rt_highlight_to_html`. Mirrors
+ * `arborium_highlight::HtmlFormat`; the numeric `format` codes match the
+ * ones the Rust ABI decodes.
+ *
+ * - `custom-elements`: `<a-k>keyword</a-k>` — default, the most compact.
+ * - `custom-elements-with-prefix`: `<code-k>keyword</code-k>` — pass a
+ *   `prefix` to namespace the element name.
+ * - `class-names`: `<span class="keyword">keyword</span>` — drop-in for
+ *   CSS that expects traditional long class names.
+ * - `class-names-with-prefix`: `<span class="arb-keyword">…</span>` —
+ *   class names prefixed so they don't collide with page CSS.
+ */
+export type HtmlFormat =
+    | { kind: 'custom-elements' }
+    | { kind: 'custom-elements-with-prefix'; prefix: string }
+    | { kind: 'class-names' }
+    | { kind: 'class-names-with-prefix'; prefix: string };
+
+/**
  * An edit to apply to the text for incremental parsing.
  *
- * Not yet surfaced through arborium-rt's ABI (ABI v1 re-parses from scratch on
- * each `setText`). Kept here to match the wire crate's shape so consumers can
- * start typing against it ahead of the ABI bump.
+ * Not yet surfaced through arborium-rt's ABI (v2 still re-parses from scratch
+ * on each `setText`). Kept here to match the wire crate's shape so consumers
+ * can start typing against it ahead of the ABI bump.
  */
 export interface Edit {
     start_byte: number;
