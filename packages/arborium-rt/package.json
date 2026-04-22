@@ -18,7 +18,11 @@
     },
     "./host-module": "./dist/host/web-tree-sitter.mjs",
     "./host-wasm": "./dist/host/web-tree-sitter.wasm",
-    "./runtime-wasm": "./dist/runtime/arborium_emscripten_runtime.wasm"
+    "./runtime-wasm": "./dist/runtime/arborium_emscripten_runtime.wasm",
+    "./grammars/*": {
+      "types": "./dist/grammars/*/index.d.ts",
+      "import": "./dist/grammars/*/index.js"
+    }
   },
   "imports": {
     "#wasm-loader": {
@@ -32,7 +36,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "pretest": "tsc && node ../arborium-rt-cli/dist/main.js stage-dist",
+    "pretest": "tsc && node ../arborium-rt-cli/dist/main.js stage-dist && node ../arborium-rt-cli/dist/main.js package-all --only json",
     "test": "vitest run"
   },
   "devDependencies": {

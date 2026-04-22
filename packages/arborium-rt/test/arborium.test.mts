@@ -56,13 +56,16 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
         }
     });
 
-    it('consumes a generated @appellation/arborium-rt-<lang> package end-to-end', async () => {
+    it('consumes a bundled grammar subpath end-to-end', async () => {
+        // Mirrors how a consumer imports the subpath export:
+        //   import jsonGrammar from '@appellation/arborium-rt/grammars/json';
+        // From inside the package the module lives at dist/grammars/json/index.js.
         const { default: jsonGrammarPackage } = await import(
-            resolve(repoRoot, 'target/packages/json/index.js')
+            resolve(here, '..', 'dist', 'grammars', 'json', 'index.js')
         );
 
         const runtime = await loadArboriumRuntime();
-        // The whole package is structurally a LoadGrammarOptions — no cherry-picking.
+        // The whole module is structurally a LoadGrammarOptions — no cherry-picking.
         const grammar = await runtime.loadGrammar(jsonGrammarPackage);
         const session = grammar.createSession();
         try {

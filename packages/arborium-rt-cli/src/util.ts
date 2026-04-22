@@ -39,6 +39,12 @@ export interface Paths {
     readonly patchesDir: string;
     readonly targetDir: string;
     readonly grammarsOut: string;
+    /**
+     * Directory where per-grammar subdirs (index.js / index.d.ts / wasm /
+     * .scm) are emitted. Lives inside the runtime package's `dist/` so the
+     * subpath exports (`@appellation/arborium-rt/grammars/<lang>`) resolve
+     * to a sibling of the compiled TS.
+     */
     readonly packagesOut: string;
     readonly hostWasmOut: string;
     readonly runtimeWasm: string;
@@ -58,7 +64,7 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
         patchesDir: join(repoRoot, 'patches'),
         targetDir: join(repoRoot, 'target'),
         grammarsOut: join(repoRoot, 'target', 'grammars'),
-        packagesOut: join(repoRoot, 'target', 'packages'),
+        packagesOut: join(repoRoot, 'packages', 'arborium-rt', 'dist', 'grammars'),
         hostWasmOut: join(repoRoot, 'target', 'host-wasm'),
         runtimeWasm: join(
             repoRoot,

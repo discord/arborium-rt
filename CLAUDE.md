@@ -11,16 +11,18 @@ per-grammar `SIDE_MODULE` parser wasms dynamically, so the tree-sitter C
 runtime and arborium's query runner live once in the browser instead of being
 baked into every grammar bundle.
 
-The repo produces three deliverables:
+The repo produces two publishable npm packages:
 
-1. `arborium_emscripten_runtime.wasm` — the Rust SIDE_MODULE (this crate's
-   `cdylib`). Built for `wasm32-unknown-emscripten` via `cargo build --release`.
-2. `web-tree-sitter.{wasm,mjs}` — a custom MAIN_MODULE host built from the
-   submodule's `arborium-tree-sitter/binding_web` with an expanded export
-   list. Built by `./scripts/arborium-rt build-host`.
-3. Per-grammar `tree-sitter-<lang>.wasm` + flattened `.scm` query files,
-   wrapped as publishable `@appellation/arborium-rt-<lang>` npm packages.
-   Built by `./scripts/arborium-rt build <group> <lang>`.
+1. **`@appellation/arborium-rt`** — the TypeScript runtime wrapper. Ships
+   `arborium_emscripten_runtime.wasm` (the Rust SIDE_MODULE, built for
+   `wasm32-unknown-emscripten` via `cargo build --release`), the
+   `web-tree-sitter.{wasm,mjs}` MAIN_MODULE host (built by
+   `./scripts/arborium-rt build-host`), and every built grammar as a
+   subpath module at `@appellation/arborium-rt/grammars/<lang>`. Grammar
+   subdirs (`packages/arborium-rt/dist/grammars/<lang>/`) are emitted by
+   `./scripts/arborium-rt build <group> <lang>`.
+2. **`@appellation/arborium-rt-cli`** — this dev CLI, used to build the
+   runtime and package grammars. Not required at consumer install time.
 
 ## Core commands
 
@@ -40,15 +42,16 @@ cargo build --release
 # Build the MAIN_MODULE host wasm (needs emcc on PATH).
 ./scripts/arborium-rt build-host
 
-# Build one grammar end-to-end (wasm + flattened queries + npm package).
+# Build one grammar end-to-end (wasm + flattened queries + grammar subdir).
 ./scripts/arborium-rt build group-acorn json
 
 # Build every grammar in the submodule corpus.
 ./scripts/arborium-rt build-all [--only json,css]
 
 # Build + test the TypeScript packages. The arborium-rt `pretest` hook
-# runs `stage-dist`, which copies the built host + runtime wasms into
-# packages/arborium-rt/dist/ so the Vitest suite can actually load them.
+# runs `stage-dist` (host + runtime wasms) and `package-all --only json`
+# (grammar subdirs) into packages/arborium-rt/dist/ so the Vitest suite
+# can actually load them.
 pnpm install
 pnpm -r build
 pnpm -r test
@@ -56,8 +59,8 @@ pnpm -r test
 # Run one Vitest file while iterating on the TS wrapper.
 pnpm --filter @appellation/arborium-rt test -- arborium.test.mts
 
-# Publish all packages (runtime + CLI + every built grammar).
-./scripts/arborium-rt publish [--dry-run] [--only a,b,c] [--tag next]
+# Publish the runtime + CLI packages.
+./scripts/arborium-rt publish [--dry-run] [--tag next]
 ```
 
 ### Prereqs the tooling expects on PATH
@@ -106,12 +109,16 @@ the version-history block in `src/lib.rs` and the README.
 ### TypeScript consumer package (`packages/arborium-rt/`)
 
 Typed `Runtime` / `Grammar` / `Session` API over the ABI, published as
-`@appellation/arborium-rt`. `loadArboriumRuntime()` takes no args — the host
-`.mjs`/wasm and the runtime wasm are staged into `packages/arborium-rt/dist/`
-(under `host/` and `runtime/`) by `arborium-rt stage-dist`, and the TS
-resolver uses `new URL('./host/…', import.meta.url)` so bundlers trace the
-specifiers. `stage-dist` is the `pretest` for this package — tests won't
-work without it. The raw ABI shape lives in `src/abi.ts`; the user-facing
+`@appellation/arborium-rt`. `loadArboriumRuntime()` takes no args — the
+host `.mjs`/wasm and the runtime wasm are staged into
+`packages/arborium-rt/dist/` (under `host/` and `runtime/`) by
+`arborium-rt stage-dist`, and the TS resolver uses
+`new URL('./host/…', import.meta.url)` so bundlers trace the specifiers.
+Grammar subpath modules live under `dist/grammars/<lang>/` alongside —
+written by `arborium-rt package <group> <lang>` (or `package-all`), each
+consumed via the `./grammars/*` subpath export. `stage-dist` + at least
+one `package` run is the `pretest` for this package; tests won't work
+without them. The raw ABI shape lives in `src/abi.ts`; the user-facing
 wrappers in `src/runtime.ts`.
 
 ### Dev CLI (`packages/arborium-rt-cli/`)
@@ -156,9 +163,10 @@ submodule or tweaking a patch.
 - `target/host-wasm/web-tree-sitter.{wasm,mjs}` — MAIN_MODULE host.
 - `target/grammars/<lang>/` — `tree-sitter-<lang>.wasm` +
   flattened `.scm` query files (written by `build-grammar`).
-- `target/packages/<lang>/` — publishable `@appellation/arborium-rt-<lang>`
-  laid out with `package.json`, `index.js`, `index.d.ts`, the wasm, the
-  `.scm` files, and a README (written by `package`).
+- `packages/arborium-rt/dist/grammars/<lang>/` — per-grammar subpath
+  module: `index.js`, `index.d.ts`, the wasm, and the `.scm` files
+  (written by `package`). Exposed to consumers as
+  `@appellation/arborium-rt/grammars/<lang>`.
 
 ### Verifying a runtime build
 

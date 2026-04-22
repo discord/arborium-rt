@@ -26,13 +26,13 @@ Subcommands:
   bootstrap                          apply local patches + render submodule Cargo.toml
   build-host                         build web-tree-sitter.{wasm,mjs} (MAIN_MODULE)
   build-grammar <group> <lang>       build tree-sitter-<lang>.wasm + flatten queries
-  package <group> <lang>             generate @appellation/arborium-rt-<lang> npm package
+  package <group> <lang>             generate dist/grammars/<lang>/ inside the runtime package
   build <group> <lang>               shorthand: build-grammar then package
   build-all [--only a,b,c]           build + package every grammar in the corpus
-  package-all [--only a,b,c]         regenerate target/packages/* from already-built grammars
+  package-all [--only a,b,c]         regenerate dist/grammars/* from already-built grammars
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
   stage-dist                         stage built wasms into packages/arborium-rt/dist for publish
-  publish [options]                  pnpm publish the runtime + CLI + every built grammar
+  publish [options]                  pnpm publish the runtime + CLI packages
   --help, -h                         this help text
   --version                          print the CLI version
 
@@ -44,14 +44,12 @@ Examples:
   arborium-rt build-host
   arborium-rt build group-acorn json
   arborium-rt publish --dry-run
-  arborium-rt publish --skip-runtime --skip-cli --only json,css
+  arborium-rt publish --skip-cli
 
 Publish flags:
   --dry-run                          run \`pnpm publish --dry-run\` only
   --skip-runtime                     don't publish @appellation/arborium-rt
   --skip-cli                         don't publish @appellation/arborium-rt-cli
-  --skip-grammars                    don't publish any @appellation/arborium-rt-<lang>
-  --only a,b,c                       restrict grammars to this list
   --registry <url>                   override npm registry (default: honors
                                      each package.json's publishConfig.registry,
                                      which points at https://npm.pkg.github.com)
@@ -98,19 +96,13 @@ async function cmdBuildGrammar(args: readonly string[]): Promise<number> {
 }
 
 async function cmdBuildPackage(args: readonly string[]): Promise<number> {
-    const { positionals, values } = parseArgs({
-        args: [...args],
-        allowPositionals: true,
-        options: {
-            version: { type: 'string', default: readRuntimePackageVersion() },
-        },
-    });
+    const { positionals } = parseArgs({ args: [...args], allowPositionals: true });
     const [group, lang] = positionals;
     if (!group || !lang) {
-        process.stderr.write('usage: arborium-rt package <group> <lang> [--version X.Y.Z]\n');
+        process.stderr.write('usage: arborium-rt package <group> <lang>\n');
         return 1;
     }
-    await buildPackage({ group, lang, version: values.version ?? readRuntimePackageVersion() });
+    await buildPackage({ group, lang });
     return 0;
 }
 
@@ -126,13 +118,11 @@ async function cmdBuildAll(args: readonly string[]): Promise<number> {
         allowPositionals: true,
         options: {
             only: { type: 'string' },
-            version: { type: 'string', default: readRuntimePackageVersion() },
             'skip-package': { type: 'boolean', default: false },
         },
     });
     const only = values.only ? values.only.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
     const result = await buildAll({
-        version: values.version ?? readRuntimePackageVersion(),
         ...(only && only.length > 0 ? { only } : {}),
         skipPackage: values['skip-package'] === true,
     });
@@ -144,15 +134,13 @@ async function cmdPackageAll(args: readonly string[]): Promise<number> {
         args: [...args],
         allowPositionals: false,
         options: {
-            only:    { type: 'string' },
-            version: { type: 'string', default: readRuntimePackageVersion() },
+            only: { type: 'string' },
         },
     });
     const only = values.only
         ? values.only.split(',').map((s) => s.trim()).filter(Boolean)
         : undefined;
     const result = await packageAll({
-        version: values.version ?? readRuntimePackageVersion(),
         ...(only && only.length > 0 ? { only } : {}),
     });
     return result.failed.length === 0 ? 0 : 1;
@@ -164,18 +152,13 @@ async function cmdPublish(args: readonly string[]): Promise<number> {
         allowPositionals: false,
         options: {
             'dry-run':       { type: 'boolean', default: false },
-            'skip-runtime':  { type: 'boolean', default: false },
-            'skip-cli':      { type: 'boolean', default: false },
-            'skip-grammars': { type: 'boolean', default: false },
-            only:            { type: 'string' },
-            registry:        { type: 'string' },
-            tag:             { type: 'string' },
-            access:          { type: 'string' },
+            'skip-runtime': { type: 'boolean', default: false },
+            'skip-cli':     { type: 'boolean', default: false },
+            registry:       { type: 'string' },
+            tag:            { type: 'string' },
+            access:         { type: 'string' },
         },
     });
-    const only = values.only
-        ? values.only.split(',').map((s) => s.trim()).filter(Boolean)
-        : undefined;
     const access = values.access as 'public' | 'restricted' | undefined;
     if (access !== undefined && access !== 'public' && access !== 'restricted') {
         process.stderr.write(`--access must be "public" or "restricted"\n`);
@@ -185,8 +168,6 @@ async function cmdPublish(args: readonly string[]): Promise<number> {
         dryRun: values['dry-run'] === true,
         skipRuntime: values['skip-runtime'] === true,
         skipCli: values['skip-cli'] === true,
-        skipGrammars: values['skip-grammars'] === true,
-        ...(only && only.length > 0 ? { only } : {}),
         ...(values.registry ? { registry: values.registry } : {}),
         ...(values.tag ? { tag: values.tag } : {}),
         ...(access ? { access } : {}),
@@ -212,16 +193,6 @@ async function cmdFlatten(args: readonly string[]): Promise<number> {
 /** CLI's own version, shown by `--version`. */
 function readCliPackageVersion(): string {
     const pkgPath = join(paths().cliPackageDir, 'package.json');
-    return (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
-}
-
-/**
- * Runtime library's version — the source of truth for generated grammar
- * packages' version and their peerDependency on `@appellation/arborium-rt`.
- * Kept separate from the CLI's version so the two can evolve independently.
- */
-function readRuntimePackageVersion(): string {
-    const pkgPath = join(paths().runtimePackageDir, 'package.json');
     return (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
 }
 

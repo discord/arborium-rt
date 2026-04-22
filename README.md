@@ -47,12 +47,12 @@ through shared linear memory.
 Most consumers should use the typed TypeScript wrapper:
 
 ```sh
-npm install @appellation/arborium-rt @appellation/arborium-rt-json
+npm install @appellation/arborium-rt
 ```
 
 ```ts
 import { loadArboriumRuntime } from '@appellation/arborium-rt';
-import jsonGrammar from '@appellation/arborium-rt-json';
+import jsonGrammar from '@appellation/arborium-rt/grammars/json';
 
 const runtime = await loadArboriumRuntime();
 const grammar = await runtime.loadGrammar(jsonGrammar);
@@ -93,21 +93,37 @@ See [`packages/arborium-rt/README.md`](./packages/arborium-rt/README.md)
 for the full consumer API (`Runtime`, `Grammar`, `Session`,
 `highlightToSpans`, `highlightToHtml`, error shapes).
 
-## Grammar packages
+## Grammar subpaths
 
-Grammars ship as separate packages named `@appellation/arborium-rt-<lang>`
-whose default export is structurally assignable to
-`runtime.loadGrammar`'s argument, so no glue code is needed. Each
-package ships:
+Grammars ship inside the main `@appellation/arborium-rt` tarball and are
+imported via subpath exports — one `import` per grammar the consumer wants:
+
+```ts
+import jsonGrammar from '@appellation/arborium-rt/grammars/json';
+import cssGrammar  from '@appellation/arborium-rt/grammars/css';
+```
+
+Each subpath resolves to a tiny ESM module whose default export is
+structurally assignable to `runtime.loadGrammar`'s argument, so no glue
+code is needed. Bundlers (Vite, webpack, esbuild) tree-shake unused
+grammars — only the wasms the consumer actually imports end up in the
+final bundle, even though node_modules contains the full set.
+
+Layout inside the package:
 
 ```
-@appellation/arborium-rt-json/
-├── package.json
-├── index.js         # ESM default: { languageId, languageExport, wasm: URL, highlights, ... }
-├── index.d.ts
-├── tree-sitter-json.wasm
-├── highlights.scm   # flattened — prepend chain + own, also shipped alongside as raw file
-└── README.md
+@appellation/arborium-rt/
+├── dist/
+│   ├── host/web-tree-sitter.{wasm,mjs}
+│   ├── runtime/arborium_emscripten_runtime.wasm
+│   └── grammars/
+│       ├── json/
+│       │   ├── index.js        # ESM default: { languageId, languageExport, wasm: URL, highlights, ... }
+│       │   ├── index.d.ts
+│       │   ├── tree-sitter-json.wasm
+│       │   └── highlights.scm  # flattened — prepend chain + own, also shipped alongside as raw file
+│       └── …one per grammar
+└── package.json
 ```
 
 `runtime.loadGrammar` accepts `wasm` as a `URL`, `ArrayBuffer`,

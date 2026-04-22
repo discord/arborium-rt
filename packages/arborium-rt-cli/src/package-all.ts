@@ -1,8 +1,8 @@
 // Re-run `buildPackage` for every grammar whose wasm already exists under
 // target/grammars/<lang>/. Skips the (slow) grammar build step — just
-// regenerates target/packages/<lang>/ from the current renderers in
-// build-package.ts. Useful after bumping the package version, renaming the
-// scope, or changing README/index boilerplate.
+// regenerates packages/arborium-rt/dist/grammars/<lang>/ from the current
+// renderers in build-package.ts. Useful after changing index.js / index.d.ts
+// boilerplate.
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,7 +12,6 @@ import { buildPackage } from './build-package.js';
 import { paths, step } from './util.js';
 
 export interface PackageAllArgs {
-    version: string;
     /** If set, only repackage these grammar ids. */
     only?: string[];
 }
@@ -22,7 +21,7 @@ export interface PackageAllResult {
     readonly failed: Array<{ id: string; reason: string }>;
 }
 
-export async function packageAll(args: PackageAllArgs): Promise<PackageAllResult> {
+export async function packageAll(args: PackageAllArgs = {}): Promise<PackageAllResult> {
     const p = paths();
     const index = buildGrammarIndex(p.langsRoot);
 
@@ -53,7 +52,7 @@ export async function packageAll(args: PackageAllArgs): Promise<PackageAllResult
         const progress = `[${i + 1}/${targets.length}]`;
         process.stderr.write(`\n===== ${progress} ${entry.group}/${id} =====\n`);
         try {
-            await buildPackage({ group: entry.group, lang: id, version: args.version });
+            await buildPackage({ group: entry.group, lang: id });
             ok.push(id);
         } catch (e) {
             const reason = e instanceof Error ? e.message : String(e);
@@ -62,7 +61,7 @@ export async function packageAll(args: PackageAllArgs): Promise<PackageAllResult
         }
     }
 
-    step(`regenerated ${ok.length}/${targets.length} grammar package(s)`);
+    step(`regenerated ${ok.length}/${targets.length} grammar subpath(s)`);
     if (failed.length > 0) {
         process.stderr.write(`\nfailures:\n`);
         for (const { id, reason } of failed) {

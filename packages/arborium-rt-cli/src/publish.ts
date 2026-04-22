@@ -1,9 +1,6 @@
-// Publish the runtime + CLI + every built grammar package to a registry.
-//
-// Runtime goes first so the grammars' peerDependency constraint
-// (`@appellation/arborium-rt: ^<version>`) is satisfiable the moment a
-// grammar tarball is installed. The CLI package is independent — it can
-// publish in any order.
+// Publish the runtime + CLI packages to a registry. Grammars ship inside the
+// runtime tarball under `dist/grammars/<lang>/`, so there are no per-grammar
+// packages to publish.
 //
 // Auth is NOT handled here — rely on the user's `.npmrc` (or
 // `NODE_AUTH_TOKEN` env for GitHub Actions). For GitHub Packages, the
@@ -13,20 +10,16 @@
 //
 // in either ~/.npmrc or the repo-local .npmrc.
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-import { paths, run, step, warn } from './util.js';
+import { paths, run, step } from './util.js';
 
 export interface PublishArgs {
     /** If set, skip the runtime package (@appellation/arborium-rt). */
     skipRuntime?: boolean;
     /** If set, skip the CLI package (@appellation/arborium-rt-cli). */
     skipCli?: boolean;
-    /** If set, skip all grammar packages (target/packages/*). */
-    skipGrammars?: boolean;
-    /** If set, only publish grammars matching these ids. */
-    only?: string[];
     /**
      * Registry URL. If omitted, each package.json's `publishConfig.registry`
      * wins — which is the preferred path, since it's repo-committed.
@@ -47,7 +40,6 @@ export interface PublishArgs {
 export interface PublishResult {
     readonly ok: string[];
     readonly failed: Array<{ id: string; reason: string }>;
-    readonly skipped: string[];
 }
 
 interface PublishJob {
@@ -60,7 +52,6 @@ export async function publishAll(args: PublishArgs = {}): Promise<PublishResult>
     const p = paths();
     const ok: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
-    const skipped: string[] = [];
     const jobs: PublishJob[] = [];
 
     if (!args.skipRuntime) {
@@ -110,42 +101,6 @@ export async function publishAll(args: PublishArgs = {}): Promise<PublishResult>
         });
     }
 
-    if (!args.skipGrammars) {
-        if (!existsSync(p.packagesOut)) {
-            warn(
-                `no grammar packages at ${p.packagesOut} — skipping grammars. run \`arborium-rt build-all\` first.`,
-            );
-        } else {
-            const allGrammarIds = readdirSync(p.packagesOut)
-                .filter((name) => statSync(join(p.packagesOut, name)).isDirectory())
-                .sort();
-            const wanted = (args.only && args.only.length > 0)
-                ? new Set(args.only)
-                : undefined;
-            for (const id of allGrammarIds) {
-                if (wanted && !wanted.has(id)) {
-                    skipped.push(id);
-                    continue;
-                }
-                const dir = join(p.packagesOut, id);
-                const pkgJson = join(dir, 'package.json');
-                if (!existsSync(pkgJson)) {
-                    failed.push({ id, reason: `${pkgJson} not found` });
-                    continue;
-                }
-                jobs.push({ id, dir, packageName: readPackageName(pkgJson) });
-            }
-            if (wanted) {
-                const missing = [...wanted].filter(
-                    (id) => !jobs.some((j) => j.id === id),
-                );
-                for (const id of missing) {
-                    failed.push({ id, reason: 'not found in target/packages/' });
-                }
-            }
-        }
-    }
-
     step(
         `publishing ${jobs.length} package(s)${args.dryRun ? ' (dry-run)' : ''}` +
             (args.registry ? ` to ${args.registry}` : ''),
@@ -157,8 +112,6 @@ export async function publishAll(args: PublishArgs = {}): Promise<PublishResult>
             `\n===== ${progress} ${job.packageName} (${relative(p.repoRoot, job.dir) || '.'}) =====\n`,
         );
         try {
-            // Refuse to publish without a publishConfig.registry so a stale
-            // package.json can't silently leak to the public npmjs registry.
             assertPublishConfig(job.dir);
             await pnpmPublish(job.dir, args);
             ok.push(job.id);
@@ -170,11 +123,8 @@ export async function publishAll(args: PublishArgs = {}): Promise<PublishResult>
     }
 
     process.stderr.write(`\n===== summary =====\n`);
-    process.stderr.write(`ok:      ${ok.length}/${jobs.length}\n`);
-    process.stderr.write(`failed:  ${failed.length}/${jobs.length}\n`);
-    if (skipped.length > 0) {
-        process.stderr.write(`skipped: ${skipped.length} (not matched by --only)\n`);
-    }
+    process.stderr.write(`ok:     ${ok.length}/${jobs.length}\n`);
+    process.stderr.write(`failed: ${failed.length}/${jobs.length}\n`);
     if (failed.length > 0) {
         process.stderr.write(`\nfailures:\n`);
         for (const { id, reason } of failed) {
@@ -182,7 +132,7 @@ export async function publishAll(args: PublishArgs = {}): Promise<PublishResult>
         }
     }
 
-    return { ok, failed, skipped };
+    return { ok, failed };
 }
 
 async function pnpmPublish(dir: string, args: PublishArgs): Promise<void> {
@@ -191,8 +141,6 @@ async function pnpmPublish(dir: string, args: PublishArgs): Promise<void> {
     if (args.tag) cliArgs.push('--tag', args.tag);
     if (args.access) cliArgs.push('--access', args.access);
     if (args.dryRun) cliArgs.push('--dry-run');
-    // pnpm refuses to publish with uncommitted changes by default; the caller
-    // controls when a release is ready, so opt out of that guard.
     cliArgs.push('--no-git-checks');
     await run('pnpm', cliArgs, { cwd: dir });
 }
@@ -206,9 +154,7 @@ function readPackageName(pkgJsonPath: string): string {
 /**
  * Refuse to publish a package that lacks `publishConfig.registry`. Without
  * it, `pnpm publish` falls back to the consumer's ambient registry — usually
- * the public npmjs registry — which would leak a private package. If this
- * fires, the package was generated before build-package.ts learned to emit
- * publishConfig; run `arborium-rt package-all` to regenerate it.
+ * the public npmjs registry — which would leak a private package.
  */
 function assertPublishConfig(dir: string): void {
     const pkgJsonPath = join(dir, 'package.json');
@@ -219,7 +165,7 @@ function assertPublishConfig(dir: string): void {
         : undefined;
     if (typeof registry !== 'string' || registry.length === 0) {
         throw new Error(
-            `${pkgJsonPath} has no publishConfig.registry — regenerate with \`arborium-rt package-all\``,
+            `${pkgJsonPath} has no publishConfig.registry — refusing to publish`,
         );
     }
 }

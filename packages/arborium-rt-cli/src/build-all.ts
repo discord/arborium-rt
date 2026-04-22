@@ -12,7 +12,6 @@ import { buildPackage } from './build-package.js';
 import { paths } from './util.js';
 
 export interface BuildAllArgs {
-    version: string;
     /** If set, only try these grammar ids (for debugging). */
     only?: string[];
     /** If set, don't run `package` after `build-grammar` (wasm + queries only). */
@@ -24,7 +23,7 @@ export interface BuildAllResult {
     readonly failed: Array<{ id: string; reason: string }>;
 }
 
-export async function buildAll(args: BuildAllArgs): Promise<BuildAllResult> {
+export async function buildAll(args: BuildAllArgs = {}): Promise<BuildAllResult> {
     const p = paths();
     const index = buildGrammarIndex(p.langsRoot);
 
@@ -46,7 +45,7 @@ export async function buildAll(args: BuildAllArgs): Promise<BuildAllResult> {
         try {
             await buildGrammar({ group: entry.group, lang: id });
             if (!args.skipPackage) {
-                await buildPackage({ group: entry.group, lang: id, version: args.version });
+                await buildPackage({ group: entry.group, lang: id });
             }
             ok.push(id);
         } catch (e) {
