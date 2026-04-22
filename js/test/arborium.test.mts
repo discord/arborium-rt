@@ -1,4 +1,4 @@
-// End-to-end integration test for @discord/arborium-rt.
+// End-to-end integration test for @appellation/arborium-rt.
 //
 // Mirrors scripts/harness.mjs (repo-root), but drives the typed API rather
 // than the raw ABI. Reads the three wasms + highlights.scm directly from
@@ -65,7 +65,7 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
         }
     });
 
-    it('consumes a generated @arborium-rt/<lang> package end-to-end', async () => {
+    it('consumes a generated @appellation/arborium-rt-<lang> package end-to-end', async () => {
         const { default: hostModuleFactory } = await import(HOST_MJS);
         const { default: jsonGrammarPackage } = await import(
             resolve(repoRoot, 'target/packages/json/index.js')

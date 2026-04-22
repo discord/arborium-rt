@@ -17,7 +17,7 @@ import type { Utf16ParseResult } from './types.js';
 export interface LoadArboriumRuntimeOptions {
     /**
      * Factory produced by emscripten's MODULARIZE output. In this package, import
-     * it from `@discord/arborium-rt/host-module`; in dev, import the built
+     * it from `@appellation/arborium-rt/host-module`; in dev, import the built
      * `target/host-wasm/web-tree-sitter.mjs` directly.
      */
     hostModuleFactory: HostModuleFactory;
@@ -69,7 +69,7 @@ export interface LoadGrammarOptions {
 }
 
 /**
- * Stable shape emitted by `@arborium-rt/<lang>` grammar packages. Any
+ * Stable shape emitted by `@appellation/arborium-rt-<lang>` grammar packages. Any
  * package whose default export satisfies this interface can be handed
  * straight to {@link Runtime.loadGrammar}: it's structurally assignable
  * to {@link LoadGrammarOptions}.

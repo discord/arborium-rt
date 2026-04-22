@@ -1,9 +1,16 @@
 {
-  "name": "@discord/arborium-rt",
+  "name": "@appellation/arborium-rt",
   "version": "0.1.0",
   "description": "Dynamically-linked tree-sitter + arborium runtime for the browser",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/appellation/arborium-rt.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "bin": {
     "arborium-rt": "./dist/cli/main.js"
   },

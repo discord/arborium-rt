@@ -1,4 +1,4 @@
-// Public API for @discord/arborium-rt.
+// Public API for @appellation/arborium-rt.
 
 export {
     loadArboriumRuntime,

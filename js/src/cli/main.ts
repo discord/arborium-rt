@@ -14,6 +14,8 @@ import { buildHost } from './build-host.js';
 import { buildPackage } from './build-package.js';
 import { buildGrammarIndex } from './arborium-yaml.js';
 import { QUERY_TYPES, flattenAllIntoDir } from './flatten.js';
+import { packageAll } from './package-all.js';
+import { publishAll } from './publish.js';
 import { stageDist } from './stage-dist.js';
 import { paths, step } from './util.js';
 
@@ -24,11 +26,13 @@ Subcommands:
   bootstrap                          apply local patches + render submodule Cargo.toml
   build-host                         build web-tree-sitter.{wasm,mjs} (MAIN_MODULE)
   build-grammar <group> <lang>       build tree-sitter-<lang>.wasm + flatten queries
-  package <group> <lang>             generate @arborium-rt/<lang> npm package
+  package <group> <lang>             generate @appellation/arborium-rt-<lang> npm package
   build <group> <lang>               shorthand: build-grammar then package
   build-all [--only a,b,c]           build + package every grammar in the corpus
+  package-all [--only a,b,c]         regenerate target/packages/* from already-built grammars
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
   stage-dist                         stage built wasms into js/dist/ for publish
+  publish [options]                  npm publish the runtime + every built grammar
   --help, -h                         this help text
   --version                          print the CLI version
 
@@ -39,6 +43,19 @@ Examples:
   arborium-rt bootstrap
   arborium-rt build-host
   arborium-rt build group-acorn json
+  arborium-rt publish --dry-run
+  arborium-rt publish --skip-runtime --only json,css
+
+Publish flags:
+  --dry-run                          run \`npm publish --dry-run\` only
+  --skip-runtime                     don't publish @appellation/arborium-rt
+  --skip-grammars                    don't publish any @appellation/arborium-rt-<lang>
+  --only a,b,c                       restrict grammars to this list
+  --registry <url>                   override npm registry (default: honors
+                                     each package.json's publishConfig.registry,
+                                     which points at https://npm.pkg.github.com)
+  --tag <name>                       npm dist-tag (default "latest")
+  --access public|restricted         pass through to \`npm publish --access\`
 `;
 
 async function main(argv: readonly string[]): Promise<number> {
@@ -50,8 +67,10 @@ async function main(argv: readonly string[]): Promise<number> {
         case 'package':          return cmdBuildPackage(rest);
         case 'build':            return cmdBuild(rest);
         case 'build-all':        return cmdBuildAll(rest);
+        case 'package-all':      return cmdPackageAll(rest);
         case 'flatten-queries':  return cmdFlatten(rest);
         case 'stage-dist':       await stageDist(); return 0;
+        case 'publish':          return cmdPublish(rest);
         case '--help':
         case '-h':
         case undefined:
@@ -115,6 +134,59 @@ async function cmdBuildAll(args: readonly string[]): Promise<number> {
         version: values.version ?? readPackageVersion(),
         ...(only && only.length > 0 ? { only } : {}),
         skipPackage: values['skip-package'] === true,
+    });
+    return result.failed.length === 0 ? 0 : 1;
+}
+
+async function cmdPackageAll(args: readonly string[]): Promise<number> {
+    const { values } = parseArgs({
+        args: [...args],
+        allowPositionals: false,
+        options: {
+            only:    { type: 'string' },
+            version: { type: 'string', default: readPackageVersion() },
+        },
+    });
+    const only = values.only
+        ? values.only.split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined;
+    const result = await packageAll({
+        version: values.version ?? readPackageVersion(),
+        ...(only && only.length > 0 ? { only } : {}),
+    });
+    return result.failed.length === 0 ? 0 : 1;
+}
+
+async function cmdPublish(args: readonly string[]): Promise<number> {
+    const { values } = parseArgs({
+        args: [...args],
+        allowPositionals: false,
+        options: {
+            'dry-run':       { type: 'boolean', default: false },
+            'skip-runtime':  { type: 'boolean', default: false },
+            'skip-grammars': { type: 'boolean', default: false },
+            only:            { type: 'string' },
+            registry:        { type: 'string' },
+            tag:             { type: 'string' },
+            access:          { type: 'string' },
+        },
+    });
+    const only = values.only
+        ? values.only.split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined;
+    const access = values.access as 'public' | 'restricted' | undefined;
+    if (access !== undefined && access !== 'public' && access !== 'restricted') {
+        process.stderr.write(`--access must be "public" or "restricted"\n`);
+        return 1;
+    }
+    const result = await publishAll({
+        dryRun: values['dry-run'] === true,
+        skipRuntime: values['skip-runtime'] === true,
+        skipGrammars: values['skip-grammars'] === true,
+        ...(only && only.length > 0 ? { only } : {}),
+        ...(values.registry ? { registry: values.registry } : {}),
+        ...(values.tag ? { tag: values.tag } : {}),
+        ...(access ? { access } : {}),
     });
     return result.failed.length === 0 ? 0 : 1;
 }

@@ -161,7 +161,7 @@ The runtime alone isn't enough to run — it needs a host wasm
 (`web-tree-sitter.wasm` built with the extra `ts_*` exports it imports)
 and a grammar wasm (a per-grammar SIDE_MODULE exporting
 `tree_sitter_<lang>()`). The CLI builds both, plus the publishable
-`@arborium-rt/<lang>` npm package:
+`@appellation/arborium-rt-<lang>` npm package:
 
 ```sh
 ./scripts/arborium-rt bootstrap                      # patches + Cargo manifests
@@ -190,11 +190,11 @@ those packages installed in the CWD before `tree-sitter generate` runs
 `./scripts/arborium-rt package <group> <lang>` (or the `build`
 shorthand above, which does `build-grammar` + `package`) turns
 `target/grammars/<lang>/` into a publishable `target/packages/<lang>/`
-laid out as `@arborium-rt/<lang>`:
+laid out as `@appellation/arborium-rt-<lang>`:
 
 ```
 target/packages/json/
-├── package.json                # name: "@arborium-rt/json", version, exports
+├── package.json                # name: "@appellation/arborium-rt-json", version, exports
 ├── index.js                    # ESM default export: { languageId, languageExport, wasm: URL, highlights, ... }
 ├── index.d.ts                  # types compatible with ArboriumGrammarPackage
 ├── tree-sitter-json.wasm
@@ -206,7 +206,7 @@ The default export is structurally assignable to
 `ArboriumGrammarPackage` / `LoadGrammarOptions`, so consumers do:
 
 ```ts
-import jsonGrammar from '@arborium-rt/json';
+import jsonGrammar from '@appellation/arborium-rt-json';
 const grammar = await runtime.loadGrammar(jsonGrammar);
 ```
 
@@ -216,7 +216,7 @@ const grammar = await runtime.loadGrammar(jsonGrammar);
 ## JS consumer package
 
 A TypeScript wrapper over this ABI ships in [`js/`](./js) and publishes
-as `@discord/arborium-rt`. It handles the three-module load dance, the
+as `@appellation/arborium-rt`. It handles the three-module load dance, the
 shared-heap memory plumbing, and exposes a typed `Runtime` / `Grammar` /
 `Session` API. The same package also ships the `arborium-rt` dev CLI
 used throughout this README. See [js/README.md](./js/README.md) for
