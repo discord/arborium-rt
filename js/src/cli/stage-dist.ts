@@ -1,0 +1,48 @@
+// Stage built wasms into js/dist/ so `npm pack` / `npm publish` include them
+// alongside the compiled TypeScript. Port of `js/scripts/copy-assets.sh`.
+
+import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+
+import { paths, step } from './util.js';
+
+export async function stageDist(): Promise<void> {
+    const p = paths();
+    const hostSrcDir = p.hostWasmOut;
+    const hostWasm = join(hostSrcDir, 'web-tree-sitter.wasm');
+    const hostMjs = join(hostSrcDir, 'web-tree-sitter.mjs');
+
+    if (!existsSync(hostWasm) || !existsSync(hostMjs)) {
+        throw new Error(
+            `host wasm not found in ${hostSrcDir}. run \`arborium-rt build-host\` first.`,
+        );
+    }
+    if (!existsSync(p.runtimeWasm)) {
+        throw new Error(
+            `runtime wasm not found at ${p.runtimeWasm}. run \`cargo build --release\` first.`,
+        );
+    }
+
+    const distDir = join(p.jsDir, 'dist');
+    const hostDest = join(distDir, 'host');
+    const runtimeDest = join(distDir, 'runtime');
+    mkdirSync(hostDest, { recursive: true });
+    mkdirSync(runtimeDest, { recursive: true });
+
+    // Only ship the artifacts we distribute; leave .map files behind to keep
+    // the tarball tight. Consumers that want source maps can regenerate from
+    // the built runtime.
+    copyFileSync(hostWasm, join(hostDest, 'web-tree-sitter.wasm'));
+    copyFileSync(hostMjs, join(hostDest, 'web-tree-sitter.mjs'));
+    copyFileSync(p.runtimeWasm, join(runtimeDest, 'arborium_emscripten_runtime.wasm'));
+
+    step('staged assets:');
+    for (const file of [
+        join(hostDest, 'web-tree-sitter.wasm'),
+        join(hostDest, 'web-tree-sitter.mjs'),
+        join(runtimeDest, 'arborium_emscripten_runtime.wasm'),
+    ]) {
+        const size = statSync(file).size;
+        console.error(`    ${size.toString().padStart(10)}  ${relative(p.repoRoot, file)}`);
+    }
+}

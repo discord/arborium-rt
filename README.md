@@ -115,9 +115,9 @@ build to link.
 `arborium-rt` also has to run a second bootstrap step because
 arborium's `crates/*/Cargo.toml` files are not checked in — they're
 generated from `Cargo.stpl.toml` templates by `xtask gen` on arborium's
-side. `scripts/bootstrap.sh` takes care of this: it resets the
-submodule, applies patches, and renders the manifests. Re-run after
-updating the submodule.
+side. `./scripts/arborium-rt bootstrap` takes care of this: it resets
+the submodule, applies patches (idempotently), and renders the
+manifests. Re-run after updating the submodule.
 
 ## Build
 
@@ -126,11 +126,17 @@ Prereqs:
 - [emsdk](https://github.com/emscripten-core/emsdk) 4.0.15 on `PATH`.
 - Nightly Rust with the `rust-src` component (for `-Zbuild-std`). No
   rustup needed; a system/nix install is fine.
+- Node ≥20, `tree-sitter` CLI on `PATH` (`cargo install tree-sitter-cli`).
+
+All repo tooling lives behind one CLI:
+`./scripts/arborium-rt <subcommand>`. The wrapper auto-builds the CLI
+(`npm install && tsc`) on first run, then forwards everything.
+`./scripts/arborium-rt --help` lists subcommands.
 
 ```sh
 git clone --recurse-submodules <this-repo>
 cd arborium-rt
-./scripts/bootstrap.sh        # apply patches + render Cargo manifests
+./scripts/arborium-rt bootstrap     # apply patches + render Cargo manifests
 cargo build --release
 ```
 
@@ -149,29 +155,105 @@ Expects: `arborium_rt_abi_version`, `arborium_rt_register_grammar`,
 `arborium_rt_free_session`, `arborium_rt_set_text`, `arborium_rt_cancel`,
 `arborium_rt_parse_utf16`, `arborium_rt_free`.
 
+## Reproducing end-to-end
+
+The runtime alone isn't enough to run — it needs a host wasm
+(`web-tree-sitter.wasm` built with the extra `ts_*` exports it imports)
+and a grammar wasm (a per-grammar SIDE_MODULE exporting
+`tree_sitter_<lang>()`). The CLI builds both, plus the publishable
+`@arborium-rt/<lang>` npm package:
+
+```sh
+./scripts/arborium-rt bootstrap                      # patches + Cargo manifests
+cargo build --release                                # arborium_emscripten_runtime.wasm
+./scripts/arborium-rt build-host                     # target/host-wasm/web-tree-sitter.{wasm,mjs}
+./scripts/arborium-rt build group-acorn json         # build-grammar + package, in one
+cd js && npx vitest run                              # end-to-end parse test
+```
+
+`build-grammar` writes the flattened `.scm` query files alongside the
+wasm in `target/grammars/<lang>/`. Query inheritance (e.g., HLSL → C++ →
+C) is resolved transitively by reading each grammar's `arborium.yaml`
+`queries.highlights.prepend` list — matches arborium's own Rust-plugin
+template. C++ external scanners (`scanner.cc`/`.cpp`) are compiled with
+`em++ -std=c++17 -fno-exceptions -fno-rtti` and linked alongside
+`parser.c`; no arborium grammar needs this today, but the path exists
+so future ones won't be stuck.
+
+Grammars whose `grammar.js` `require()`s upstream node_modules (TSX
+pulls in `tree-sitter-javascript`, SCSS pulls in `tree-sitter-css`) need
+those packages installed in the CWD before `tree-sitter generate` runs
+— an npm-bootstrapping step is not yet wired into the CLI.
+
+### Packaging a grammar for npm
+
+`./scripts/arborium-rt package <group> <lang>` (or the `build`
+shorthand above, which does `build-grammar` + `package`) turns
+`target/grammars/<lang>/` into a publishable `target/packages/<lang>/`
+laid out as `@arborium-rt/<lang>`:
+
+```
+target/packages/json/
+├── package.json                # name: "@arborium-rt/json", version, exports
+├── index.js                    # ESM default export: { languageId, languageExport, wasm: URL, highlights, ... }
+├── index.d.ts                  # types compatible with ArboriumGrammarPackage
+├── tree-sitter-json.wasm
+├── highlights.scm              # raw .scm files also shipped as siblings
+└── README.md
+```
+
+The default export is structurally assignable to
+`ArboriumGrammarPackage` / `LoadGrammarOptions`, so consumers do:
+
+```ts
+import jsonGrammar from '@arborium-rt/json';
+const grammar = await runtime.loadGrammar(jsonGrammar);
+```
+
+`runtime.loadGrammar` resolves the package's `wasm: URL` internally
+(`fetch` for `http(s):`, `fs.readFile` for `file:` under Node).
+
+## JS consumer package
+
+A TypeScript wrapper over this ABI ships in [`js/`](./js) and publishes
+as `@discord/arborium-rt`. It handles the three-module load dance, the
+shared-heap memory plumbing, and exposes a typed `Runtime` / `Grammar` /
+`Session` API. The same package also ships the `arborium-rt` dev CLI
+used throughout this README. See [js/README.md](./js/README.md) for
+consumer docs; run `cd js && npm install && npm run build && npm test`
+to build and verify locally.
+
 ## Bumping the arborium submodule
 
 1. `cd third_party/arborium && git fetch origin && git checkout <new-commit>`
 2. `cd ../..`
-3. `./scripts/bootstrap.sh` — if the patches no longer apply cleanly,
-   `git am` will leave the submodule in a partial state; investigate
-   with `git -C third_party/arborium am --show-current-patch=diff`, fix
-   the patch in `patches/`, then `git am --abort && ./scripts/bootstrap.sh`
-   again.
+3. `./scripts/arborium-rt bootstrap` — if the patches no longer apply
+   cleanly, `git am` will leave the submodule in a partial state;
+   investigate with `git -C third_party/arborium am --show-current-patch=diff`,
+   fix the patch in `patches/`, then re-run. The bootstrap subcommand
+   is idempotent — it skips patches whose subject already appears in the
+   submodule's history.
 4. `cargo build --release` to verify.
 5. `git add third_party/arborium patches/ && git commit`.
 
 ## Host-side requirement
 
-The runtime imports ~29 plain-named `ts_*` symbols (e.g.
-`ts_parser_new`, `ts_query_cursor_exec`). Upstream tree-sitter's
-`binding_web/lib/exports.txt` currently only exports the `*_wasm`
-JS-bridge variants. Until upstream adds the plain names (a small
-mechanical follow-up to `tree-sitter/tree-sitter`), consumers of this
-runtime must build `web-tree-sitter.wasm` themselves with the extra
-symbols included. A reference `build-host.sh` lives on the
-`emscripten-dynlink-spike` branch of the associated arborium fork
-(`appellation/arborium`).
+The runtime imports two classes of symbols a stock `web-tree-sitter.wasm`
+doesn't keep alive through `-sEXPORTED_FUNCTIONS`:
+
+1. Plain-named tree-sitter C symbols (`ts_parser_new`, `ts_query_cursor_exec`,
+   ...) — upstream's `binding_web/lib/exports.txt` only lists the `*_wasm`
+   JS-bridge variants.
+2. libc / pthread surface pulled in by Rust's `std` (`pthread_mutex_*`,
+   `writev`, `getenv`, `posix_memalign`, ...) — upstream's
+   `stdlib-symbols.txt` covers only `malloc`/`memcpy`/etc.
+
+`./scripts/arborium-rt build-host` produces a compatible host by
+concatenating the upstream lists with the extra names arborium-rt needs.
+Both extras arrays are enumerated inline in
+[`js/src/cli/build-host.ts`](./js/src/cli/build-host.ts) and commented
+with how they were discovered (`wasm-dis` on the runtime wasm). Until
+the deltas are upstreamed, that module is the source of truth.
 
 ## Stability
 

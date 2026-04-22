@@ -1,0 +1,40 @@
+{
+  "name": "@discord/arborium-rt",
+  "version": "0.1.0",
+  "description": "Dynamically-linked tree-sitter + arborium runtime for the browser",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "arborium-rt": "./dist/cli/main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./host-module": "./dist/host/web-tree-sitter.mjs",
+    "./host-wasm": "./dist/host/web-tree-sitter.wasm",
+    "./runtime-wasm": "./dist/runtime/arborium_emscripten_runtime.wasm"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && node dist/cli/main.js stage-dist && chmod +x dist/cli/main.js",
+    "build:tsc-only": "tsc && chmod +x dist/cli/main.js",
+    "cli": "node dist/cli/main.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "yaml": "^2.8.3"
+  }
+}

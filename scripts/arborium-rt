@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# Forwarding wrapper for the arborium-rt dev CLI. Auto-builds the CLI on
+# first run, then forwards all args to `node js/dist/cli/main.js`.
+#
+# Usage (from repo root):
+#   ./scripts/arborium-rt <subcommand>          # e.g. bootstrap, build-host, etc.
+#   ./scripts/arborium-rt --help                # full subcommand list
+#
+# After the first run, `js/node_modules/.bin/arborium-rt` also works if you
+# prefer the bin symlink.
+
+set -euo pipefail
+
+JS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../js" && pwd)"
+
+if [[ ! -f "${JS_DIR}/dist/cli/main.js" ]]; then
+    echo "==> first-time CLI setup (npm install + tsc)" >&2
+    (cd "${JS_DIR}" && npm install --silent && npm run build:tsc-only --silent)
+fi
+
+exec node "${JS_DIR}/dist/cli/main.js" "$@"
