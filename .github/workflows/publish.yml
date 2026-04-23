@@ -1,0 +1,137 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (defaults to v<package.json version>)"
+        required: false
+        type: string
+      dry-run:
+        description: "Build + pack + release, but skip npm publish"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-emscripten
+          components: rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.15
+          actions-cache-folder: emsdk-cache
+
+      - name: Install tree-sitter CLI
+        working-directory: ${{ runner.temp }}
+        run: cargo install --locked tree-sitter-cli
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Bootstrap submodule
+        run: ./scripts/arborium-rt bootstrap
+
+      - name: Build runtime SIDE_MODULE
+        run: cargo build --release
+
+      - name: Build web-tree-sitter host (MAIN_MODULE)
+        run: ./scripts/arborium-rt build-host
+
+      - name: Build all grammars
+        run: ./scripts/arborium-rt build-all
+
+      - name: Build TypeScript packages
+        run: pnpm -r build
+
+      - name: Stage dist (host + runtime wasms)
+        run: ./scripts/arborium-rt stage-dist
+
+      - name: Run tests
+        run: pnpm -r test
+
+      - name: Resolve version & tag
+        id: meta
+        run: |
+          version=$(node -p "require('./packages/arborium-rt/package.json').version")
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then
+            tag="v${version}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack tarball
+        id: pack
+        working-directory: packages/arborium-rt
+        run: |
+          pnpm pack --pack-destination "$GITHUB_WORKSPACE"
+          tarball="$GITHUB_WORKSPACE/discord-arborium-rt-${{ steps.meta.outputs.version }}.tgz"
+          if [ ! -f "$tarball" ]; then
+            echo "expected tarball not found: $tarball" >&2
+            ls "$GITHUB_WORKSPACE" >&2
+            exit 1
+          fi
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arborium-rt-${{ steps.meta.outputs.version }}
+          path: ${{ steps.pack.outputs.tarball }}
+
+      # Publishing is allowed to fail (network, version already published,
+      # token trouble) — we still want the GitHub release + tarball upload
+      # below to happen so the artifact is recoverable.
+      - name: Publish to npm
+        id: publish
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm --filter @discord/arborium-rt publish --access public --no-git-checks
+
+      - name: Create GitHub release
+        if: ${{ always() && steps.pack.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.meta.outputs.tag }}"
+          notes="Release ${tag}"
+          if [ "${{ steps.publish.outcome }}" = "failure" ]; then
+            notes="${notes}
+
+          > npm publish failed in this run — install from the attached tarball."
+          elif [ "${{ inputs.dry-run }}" = "true" ]; then
+            notes="${notes}
+
+          > dry-run: npm publish was skipped."
+          fi
+          gh release create "$tag" "${{ steps.pack.outputs.tarball }}" \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --notes "$notes"

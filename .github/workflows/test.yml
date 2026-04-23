@@ -1,0 +1,68 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-emscripten
+          components: rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.15
+          actions-cache-folder: emsdk-cache
+
+      # Installed from outside the repo so the repo's `.cargo/config.toml`
+      # (which pins the build target to wasm32-unknown-emscripten) doesn't
+      # apply to this host-tool install.
+      - name: Install tree-sitter CLI
+        working-directory: ${{ runner.temp }}
+        run: cargo install --locked tree-sitter-cli
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Bootstrap submodule (patches + render Cargo.toml)
+        run: ./scripts/arborium-rt bootstrap
+
+      - name: Build runtime SIDE_MODULE
+        run: cargo build --release
+
+      - name: Build web-tree-sitter host (MAIN_MODULE)
+        run: ./scripts/arborium-rt build-host
+
+      # The arborium-rt package's `pretest` packages json + stage-dist, but
+      # `package-all` needs the grammar wasm already built.
+      - name: Build json grammar (needed by tests)
+        run: ./scripts/arborium-rt build-grammar group-acorn json
+
+      - name: Build TypeScript packages
+        run: pnpm -r build
+
+      - name: Run tests
+        run: pnpm -r test
