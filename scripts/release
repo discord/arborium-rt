@@ -120,6 +120,9 @@ if [[ "${SKIP_BUILD}" -eq 0 ]]; then
     step "stage-dist"
     ./scripts/arborium-rt stage-dist
 
+    step "stage-themes"
+    ./scripts/arborium-rt stage-themes
+
     step "pnpm -r build"
     pnpm -r build
 else

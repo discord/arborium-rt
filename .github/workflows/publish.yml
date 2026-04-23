@@ -73,11 +73,16 @@ jobs:
       - name: Build all grammars
         run: ./scripts/arborium-rt build-all
 
-      - name: Build TypeScript packages
-        run: pnpm -r build
-
       - name: Stage dist (host + runtime wasms)
         run: ./scripts/arborium-rt stage-dist
+
+      # `stage-themes` writes src/themes.ts, which src/index.ts imports —
+      # tsc fails without it. Must run before `pnpm -r build`.
+      - name: Stage themes (src/themes.ts + dist/themes/*.css)
+        run: ./scripts/arborium-rt stage-themes
+
+      - name: Build TypeScript packages
+        run: pnpm -r build
 
       - name: Run tests
         run: pnpm -r test

@@ -68,6 +68,11 @@ jobs:
       - name: Build + package json grammar (needed by tests)
         run: ./scripts/arborium-rt build group-acorn json
 
+      # `stage-themes` renders dist/themes/<id>.css and writes src/themes.ts,
+      # which src/index.ts imports — tsc fails without it.
+      - name: Stage themes (src/themes.ts + dist/themes/*.css)
+        run: ./scripts/arborium-rt stage-themes
+
       - name: Build TypeScript packages
         run: pnpm -r build
 
