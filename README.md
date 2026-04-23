@@ -51,11 +51,10 @@ npm install @discord/arborium-rt
 ```
 
 ```ts
-import { loadArboriumRuntime } from "@discord/arborium-rt";
-import jsonGrammar from "@discord/arborium-rt/grammars/json";
+import { loadArboriumRuntime, GRAMMARS } from "@discord/arborium-rt";
 
 const runtime = await loadArboriumRuntime();
-const grammar = await runtime.loadGrammar(jsonGrammar);
+const grammar = await runtime.loadGrammar(GRAMMARS.json);
 const session = grammar.createSession();
 try {
   session.setText("[1, 2, 3]");
@@ -93,21 +92,21 @@ See [`packages/arborium-rt/README.md`](./packages/arborium-rt/README.md)
 for the full consumer API (`Runtime`, `Grammar`, `Session`,
 `highlightToSpans`, `highlightToHtml`, error shapes).
 
-## Grammar subpaths
+## Grammars
 
-Grammars ship inside the main `@discord/arborium-rt` tarball and are
-imported via subpath exports — one `import` per grammar the consumer wants:
+Every supported grammar is bundled into the `@discord/arborium-rt` tarball
+and exposed as a single eager map — `GRAMMARS` — keyed by language id.
+Each entry carries lightweight metadata (`languageId`, `languageExport`)
+plus URL references to the per-grammar `.wasm` and `.scm` assets; the
+bytes are only fetched when `loadGrammar` runs.
 
 ```ts
-import jsonGrammar from "@discord/arborium-rt/grammars/json";
-import cssGrammar from "@discord/arborium-rt/grammars/css";
-```
+import { GRAMMARS, loadArboriumRuntime, AVAILABLE_LANGUAGES } from "@discord/arborium-rt";
 
-Each subpath resolves to a tiny ESM module whose default export is
-structurally assignable to `runtime.loadGrammar`'s argument, so no glue
-code is needed. Bundlers (Vite, webpack, esbuild) tree-shake unused
-grammars — only the wasms the consumer actually imports end up in the
-final bundle, even though node_modules contains the full set.
+const runtime = await loadArboriumRuntime();
+const grammar = await runtime.loadGrammar(GRAMMARS.typescript);
+// AVAILABLE_LANGUAGES exposes every id as a typed string union for pickers.
+```
 
 Layout inside the package:
 
@@ -116,20 +115,57 @@ Layout inside the package:
 ├── dist/
 │   ├── host/web-tree-sitter.{wasm,mjs}
 │   ├── runtime/arborium_emscripten_runtime.wasm
+│   ├── grammars.js           # exports GRAMMARS — URLs point at the sibling subdirs
 │   └── grammars/
 │       ├── json/
-│       │   ├── index.js        # ESM default: { languageId, languageExport, wasm: URL, highlights, ... }
-│       │   ├── index.d.ts
 │       │   ├── tree-sitter-json.wasm
-│       │   └── highlights.scm  # flattened — prepend chain + own, also shipped alongside as raw file
+│       │   └── highlights.scm       # flattened — prepend chain + own
 │       └── …one per grammar
 └── package.json
 ```
 
-`runtime.loadGrammar` accepts `wasm` as a `URL`, `ArrayBuffer`,
-`Uint8Array`, `Response`, or a `Promise` of any of those — it uses
-`fetch` for `http(s):` URLs and `fs.readFile` for `file:` URLs under
-Node.
+`runtime.loadGrammar` accepts `wasm` as a `URL`, `ArrayBuffer`, or
+`Uint8Array`, and accepts the query fields (`highlights`, `injections`,
+`locals`) as either a raw string or a `URL` — URLs are fetched under
+browsers and read from disk under Node.
+
+### Filtering bundled grammars (rspack / rsbuild)
+
+Because `GRAMMARS` references every language's assets statically, an
+unfiltered rspack build will emit ~160 MB of `.wasm` + `.scm` even if
+the consumer only uses a handful. Install the companion plugin and
+pass an `allow` or `deny` list to strip entries before rspack traces
+the URLs:
+
+```sh
+npm install @discord/arborium-rt-plugin-rspack
+```
+
+```ts
+// rspack.config.ts / rsbuild.config.ts
+import { ArboriumRtRspackPlugin } from "@discord/arborium-rt-plugin-rspack";
+
+export default {
+  // rspack
+  plugins: [
+    new ArboriumRtRspackPlugin({ allow: ["json", "rust", "typescript"] }),
+  ],
+
+  // …or, under rsbuild:
+  tools: {
+    rspack: {
+      plugins: [
+        new ArboriumRtRspackPlugin({ deny: ["groovy", "svelte"] }),
+      ],
+    },
+  },
+};
+```
+
+Typical savings: **164 MB → 4.9 MB** when allow-listing three languages.
+No runtime-side changes required — the plugin rewrites
+`dist/grammars.js` at load time, so the URLs that rspack emits as
+assets are exactly the set that survives the filter.
 
 ## Raw ABI
 

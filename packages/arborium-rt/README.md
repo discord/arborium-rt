@@ -12,22 +12,20 @@ usage.
 npm install @discord/arborium-rt
 ```
 
-The package ships three wasm/mjs assets alongside its compiled JS:
+The package ships three asset kinds alongside its compiled JS:
 `dist/host/web-tree-sitter.{wasm,mjs}` (the MAIN_MODULE tree-sitter C runtime
 rebuilt with the plain `ts_*` exports + libc/pthread surface arborium-rt's
-SIDE_MODULEs import) and `dist/runtime/arborium_emscripten_runtime.wasm`.
+SIDE_MODULEs import), `dist/runtime/arborium_emscripten_runtime.wasm` (the
+arborium-rt SIDE_MODULE), and `dist/grammars/<lang>/{tree-sitter-<lang>.wasm, *.scm}`
+(one subdir per bundled language).
 
 ## Usage
 
 ```ts
-import { loadArboriumRuntime } from '@discord/arborium-rt';
+import { GRAMMARS, loadArboriumRuntime } from '@discord/arborium-rt';
 
 const runtime = await loadArboriumRuntime();
-
-const grammar = await runtime.loadGrammar({
-    wasm: fetch('https://.../tree-sitter-rust.wasm'),
-    highlights: await fetch('.../rust/highlights.scm').then((r) => r.text()),
-});
+const grammar = await runtime.loadGrammar(GRAMMARS.rust);
 
 const session = grammar.createSession();
 session.setText('fn main() { println!("hi") }');
@@ -41,57 +39,66 @@ grammar.unregister();
 `loadArboriumRuntime()` takes no arguments — the MAIN_MODULE host and the
 arborium-rt SIDE_MODULE ship inside the package (`dist/host/` and
 `dist/runtime/`) and are loaded relative to the module's own URL. Bundlers
-(Vite, webpack, esbuild) trace those specifiers so the wasm assets are
-copied automatically into the consumer's build.
+(Vite, webpack/rspack, esbuild) trace those specifiers so the wasm assets
+are copied automatically into the consumer's build.
 
-`wasm` on `loadGrammar` accepts anything fetchable: `ArrayBuffer`,
-`Uint8Array`, `Response`, `URL`, or a `Promise` of any of those — use
-whatever your environment makes easy.
+`runtime.loadGrammar` accepts:
+
+- `wasm`: a `URL`, `ArrayBuffer`, or `Uint8Array`.
+- `highlights` / `injections` / `locals`: either a raw string or a `URL` —
+  the runtime reads `file:` URLs off disk under Node and `fetch`es
+  everything else.
+
+The bundled `GRAMMARS` entries use URLs for all of those fields, so listing
+every grammar costs only a few bytes of eager metadata; the bytes don't
+load until you call `loadGrammar`.
+
+## Bundle size + rspack filter
+
+Because `GRAMMARS` names every language statically, a naïve rspack/webpack
+build will emit every grammar's `.wasm` + `.scm` (around 160 MB total).
+Install `@discord/arborium-rt-plugin-rspack` and pass an `allow` or `deny`
+list to strip entries at build time — see the repo-root README or the
+plugin's package for details.
 
 ## API shape
 
-| Symbol                | What                                                               |
-| --------------------- | ------------------------------------------------------------------ |
-| `loadArboriumRuntime` | Load the host + runtime; returns a `Runtime`. Checks ABI version.  |
-| `Runtime.loadGrammar` | Load a grammar SIDE_MODULE, register it, return a `Grammar`.       |
-| `Grammar.createSession` | Open a session against this grammar.                             |
-| `Grammar.unregister`  | Tear down the grammar + all its live sessions.                     |
-| `Session.setText`     | Replace the session's text. Triggers a parse.                      |
-| `Session.parse`       | Return the current `Utf16ParseResult`.                             |
-| `Session.cancel`      | Cancel an in-flight parse.                                         |
-| `Session.free`        | Release the session.                                               |
-| `ArboriumError`       | Thrown on ABI mismatch / registration / parse errors. Has `.kind`. |
+| Symbol                  | What                                                                    |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `loadArboriumRuntime`   | Load the host + arborium SIDE_MODULE; returns a `Runtime`.              |
+| `GRAMMARS`              | Eager map of every bundled grammar keyed by language id.                |
+| `AVAILABLE_LANGUAGES`   | Readonly tuple of every grammar id — for pickers / validation.          |
+| `Runtime.loadGrammar`   | Load a grammar SIDE_MODULE, register it, return a `Grammar`.            |
+| `Grammar.createSession` | Open a session against this grammar.                                    |
+| `Grammar.unregister`    | Tear down the grammar + all its live sessions.                          |
+| `Session.setText`       | Replace the session's text. Triggers a parse.                           |
+| `Session.parse`         | Return the current `Utf16ParseResult`.                                  |
+| `Session.highlightToHtml` / `highlightToSpans` | Full highlight pipeline output.                  |
+| `Session.cancel`        | Cancel an in-flight parse.                                              |
+| `Session.free`          | Release the session.                                                    |
+| `ArboriumError`         | Thrown on registration / parse / asset-fetch errors. Has `.kind`.       |
 
-Type exports (`Utf16Span`, `Utf16Injection`, `Utf16ParseResult`, `Edit`,
-`ArboriumErrorKind`, `HostModule`, `HostModuleFactory`, `RuntimeAbi`,
-`WasmSource`) are available from the package root. All offsets in
-`Utf16ParseResult` are UTF-16 code-unit indices, compatible with
-`String.prototype.slice`.
+Type exports (`Utf16Span`, `Utf16Injection`, `Utf16ParseResult`,
+`ThemedSpan`, `HtmlFormat`, `Edit`, `ArboriumErrorKind`,
+`ArboriumGrammarPackage`, `BundledGrammarId`, `AvailableLanguage`,
+`HostModule`, `HostModuleFactory`, `RuntimeAbi`, `WasmSource`) are
+available from the package root. All offsets in `Utf16ParseResult` are
+UTF-16 code-unit indices, compatible with `String.prototype.slice`.
 
-## Grammar source
+## Custom grammars
 
-Grammars ship as separate packages (`@discord/arborium-rt-<lang>`) whose default
-export is an `ArboriumGrammarPackage`. The object is structurally
-assignable to `loadGrammar`'s input, so no glue code is needed:
+`loadGrammar` also accepts a hand-assembled `LoadGrammarOptions` if you
+want to load a grammar that isn't in `GRAMMARS`. The `wasm` field takes
+a `URL`, `ArrayBuffer`, or `Uint8Array`; the query fields take either
+raw strings or `URL`s.
 
 ```ts
-import jsonGrammar from '@discord/arborium-rt-json';
-const grammar = await runtime.loadGrammar(jsonGrammar);
+const grammar = await runtime.loadGrammar({
+    languageId: 'custom',
+    wasm: new URL('./my-grammar.wasm', import.meta.url),
+    highlights: await fetch('./highlights.scm').then((r) => r.text()),
+});
 ```
-
-Each grammar package ships:
-
-- `tree-sitter-<lang>.wasm` — SIDE_MODULE parser tables.
-- `highlights.scm` (+ optional `injections.scm`, `locals.scm`) — flattened
-  with any inherited queries prepended.
-- `index.js` — default-exports `{ languageId, languageExport, wasm: URL,
-  highlights, ... }`. The `wasm` URL is resolved against `import.meta.url`
-  so bundlers handle asset copying automatically.
-
-`loadGrammar` accepts `wasm` as a `URL` in addition to bytes/Response —
-it'll `fetch` for `http(s):` URLs and `fs.readFile` for `file:` URLs under
-Node. Consumers that want to pre-fetch or supply bytes directly can still
-do so.
 
 ## License
 

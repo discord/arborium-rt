@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 #
-# Release @discord/arborium-rt to GitHub from a local build.
+# Release the arborium-rt npm packages to GitHub from a local build.
 #
-# Builds every grammar, packs the runtime package, creates (or reuses) a
-# git tag at HEAD, pushes it, and attaches the tarball to a new GitHub
-# Release. Does not publish to npm — run `pnpm --filter @discord/arborium-rt
-# publish` separately if you want that.
+# Packs @discord/arborium-rt (the runtime) and @discord/arborium-rt-plugin-rspack
+# (the optional rspack grammar filter), creates (or reuses) a git tag at
+# HEAD, pushes it, and attaches both tarballs to a new GitHub Release.
+# The tag is driven by the runtime package's version; the plugin must be
+# kept in lockstep. Does not publish to npm — run the `pnpm publish` calls
+# listed at the bottom separately if you want that.
 #
 # Usage:
-#   scripts/release                # tag = v<package.json version>
+#   scripts/release                # tag = v<runtime package version>
 #   scripts/release --tag v1.2.3   # override tag
 #   scripts/release --draft        # create the release as a draft
 #   scripts/release --dry-run      # stop before tag push + release create
@@ -68,10 +70,14 @@ fi
 
 # --- resolve version + tag ----------------------------------------------------
 VERSION="$(node -p "require('./packages/arborium-rt/package.json').version")"
+PLUGIN_VERSION="$(node -p "require('./packages/arborium-rt-plugin-rspack/package.json').version")"
 if [[ -z "${TAG}" ]]; then
     TAG="v${VERSION}"
 fi
-step "release tag: ${TAG} (package version ${VERSION})"
+step "release tag: ${TAG} (runtime ${VERSION}, plugin ${PLUGIN_VERSION})"
+if [[ "${VERSION}" != "${PLUGIN_VERSION}" ]]; then
+    warn "runtime (${VERSION}) and plugin (${PLUGIN_VERSION}) versions differ — bumping in lockstep is the convention"
+fi
 
 # --- working-tree sanity ------------------------------------------------------
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -132,24 +138,32 @@ fi
 TARBALL_DIR="${REPO_ROOT}/target/release-artifacts"
 mkdir -p "${TARBALL_DIR}"
 # Wipe older tarballs so we don't confuse the version picker below.
-rm -f "${TARBALL_DIR}"/discord-arborium-rt-*.tgz
+rm -f "${TARBALL_DIR}"/discord-arborium-rt-*.tgz \
+      "${TARBALL_DIR}"/discord-arborium-rt-plugin-rspack-*.tgz
 
-step "pnpm pack -> ${TARBALL_DIR}"
+step "pnpm pack (runtime) -> ${TARBALL_DIR}"
 (cd packages/arborium-rt && pnpm pack --pack-destination "${TARBALL_DIR}")
 
+step "pnpm pack (rspack plugin) -> ${TARBALL_DIR}"
+(cd packages/arborium-rt-plugin-rspack && pnpm pack --pack-destination "${TARBALL_DIR}")
+
 TARBALL="${TARBALL_DIR}/discord-arborium-rt-${VERSION}.tgz"
-if [[ ! -f "${TARBALL}" ]]; then
-    echo "error: expected tarball not found: ${TARBALL}" >&2
-    echo "       contents of ${TARBALL_DIR}:" >&2
-    ls -la "${TARBALL_DIR}" >&2
-    exit 1
-fi
-step "packed $(basename "${TARBALL}") ($(du -h "${TARBALL}" | cut -f1))"
+PLUGIN_TARBALL="${TARBALL_DIR}/discord-arborium-rt-plugin-rspack-${PLUGIN_VERSION}.tgz"
+for t in "${TARBALL}" "${PLUGIN_TARBALL}"; do
+    if [[ ! -f "${t}" ]]; then
+        echo "error: expected tarball not found: ${t}" >&2
+        echo "       contents of ${TARBALL_DIR}:" >&2
+        ls -la "${TARBALL_DIR}" >&2
+        exit 1
+    fi
+    step "packed $(basename "${t}") ($(du -h "${t}" | cut -f1))"
+done
 
 # --- dry-run stop -------------------------------------------------------------
 if [[ "${DRY_RUN}" -eq 1 ]]; then
     step "dry-run: stopping before tag push + release create"
-    echo "    tarball: ${TARBALL}"
+    echo "    runtime tarball: ${TARBALL}"
+    echo "    plugin  tarball: ${PLUGIN_TARBALL}"
     exit 0
 fi
 
@@ -164,7 +178,7 @@ git push origin "refs/tags/${TAG}"
 
 # --- github release -----------------------------------------------------------
 RELEASE_NOTES="Release ${TAG} (commit $(git rev-parse --short HEAD))"
-RELEASE_ARGS=("${TAG}" "${TARBALL}" --title "${TAG}" --notes "${RELEASE_NOTES}")
+RELEASE_ARGS=("${TAG}" "${TARBALL}" "${PLUGIN_TARBALL}" --title "${TAG}" --notes "${RELEASE_NOTES}")
 if [[ "${DRAFT}" -eq 1 ]]; then
     RELEASE_ARGS+=(--draft)
 fi
@@ -173,3 +187,6 @@ step "creating GitHub Release ${TAG}"
 gh release create "${RELEASE_ARGS[@]}"
 
 step "done: https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner)/releases/tag/${TAG}"
+step "to publish to npm, run:"
+echo "    pnpm --filter @discord/arborium-rt publish"
+echo "    pnpm --filter @discord/arborium-rt-plugin-rspack publish"
