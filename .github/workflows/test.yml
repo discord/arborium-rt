@@ -61,10 +61,12 @@ jobs:
       - name: Build web-tree-sitter host (MAIN_MODULE)
         run: ./scripts/arborium-rt build-host
 
-      # The arborium-rt package's `pretest` packages json + stage-dist, but
-      # `package-all` needs the grammar wasm already built.
-      - name: Build json grammar (needed by tests)
-        run: ./scripts/arborium-rt build-grammar group-acorn json
+      # The arborium-rt package's `pretest` re-packages json + stages dist,
+      # but it needs the grammar wasm *and* dist/grammars/json already present
+      # (the `package` step writes src/languages.ts, which src/index.ts imports
+      # — tsc fails without it). `build` = `build-grammar` + `package`.
+      - name: Build + package json grammar (needed by tests)
+        run: ./scripts/arborium-rt build group-acorn json
 
       - name: Build TypeScript packages
         run: pnpm -r build
