@@ -33,7 +33,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "pretest": "../../scripts/arborium-rt package-all --only json && ../../scripts/arborium-rt stage-themes && tsc && ../../scripts/arborium-rt stage-dist",
+    "pretest": "../../scripts/arborium-rt package-all --only json && tsc && ../../scripts/arborium-rt stage",
     "test": "vitest run"
   },
   "devDependencies": {

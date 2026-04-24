@@ -15,8 +15,7 @@ import { buildPackage } from './build-package.js';
 import { buildGrammarIndex } from './arborium-yaml.js';
 import { QUERY_TYPES, flattenAllIntoDir } from './flatten.js';
 import { packageAll } from './package-all.js';
-import { stageDist } from './stage-dist.js';
-import { stageThemes } from './stage-themes.js';
+import { stage } from './stage.js';
 import { Logger, paths } from './util.js';
 import { writeGrammarsIndexModule } from './write-grammars-index.js';
 
@@ -32,8 +31,7 @@ Subcommands:
   build-all [--only a,b,c] [-j N]    build + package every grammar in the corpus
   package-all [--only a,b,c] [-j N]  regenerate dist/grammars/* from already-built grammars
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
-  stage-dist                         stage built wasms into packages/arborium-rt/dist for publish
-  stage-themes                       render theme CSS + emit src/themes.ts from arborium-theme builtin
+  stage                              stage themes + built wasms into dist/ for publish/testing
   --help, -h                         this help text
   --version                          print the CLI version
 
@@ -47,7 +45,7 @@ Examples:
 
 Publishing the runtime package is not a CLI subcommand — run
 \`pnpm publish\` directly from packages/arborium-rt/ once build-all +
-stage-dist have populated its dist/ directory.
+stage have populated its dist/ directory.
 `;
 
 async function main(argv: readonly string[]): Promise<number> {
@@ -61,8 +59,7 @@ async function main(argv: readonly string[]): Promise<number> {
         case 'build-all': return cmdBuildAll(rest);
         case 'package-all': return cmdPackageAll(rest);
         case 'flatten-queries': return cmdFlatten(rest);
-        case 'stage-dist': await stageDist(); return 0;
-        case 'stage-themes': await stageThemes(); return 0;
+        case 'stage': await stage(); return 0;
         case '--help':
         case '-h':
         case undefined:

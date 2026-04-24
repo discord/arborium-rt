@@ -1,5 +1,5 @@
 // Smoke tests for the bundled THEMES index + the CSS shape emitted by
-// `crates/theme-codegen`. The `pretest` hook runs `stage-themes` so the
+// `crates/theme-codegen`. The `pretest` hook runs `stage` so the
 // fixtures under dist/themes/ are fresh.
 
 import { readFile } from 'node:fs/promises';

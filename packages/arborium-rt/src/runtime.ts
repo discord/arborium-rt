@@ -452,7 +452,7 @@ export class Session {
 /**
  * Dynamically import the bundled host-module factory. Resolves relative to
  * the compiled `dist/runtime.js`, so the sibling `dist/host/web-tree-sitter.mjs`
- * (staged by `arborium-rt stage-dist`) is reached at runtime. Bundlers
+ * (staged by `arborium-rt stage`) is reached at runtime. Bundlers
  * (Vite, webpack, esbuild) trace the literal specifier and ship the asset
  * alongside the consumer's build.
  */

@@ -1,18 +1,15 @@
-// Build + invoke the host-native `arborium-rt-theme-codegen` binary, which
-// walks `arborium_theme::theme::builtin::all_with_ids()`, renders each theme
-// through `Theme::to_css`, writes `dist/themes/<id>.css` into the runtime
-// package, and returns the metadata that feeds `packages/arborium-rt/
-// src/themes.ts`. The Rust binary lives outside the emscripten SIDE_MODULE
-// runtime on purpose — theme→CSS is a publish-time operation and has no
-// business bloating the wasm that every consumer loads.
+// Stage built wasms + rendered themes into the runtime package's dist/ so
+// `npm pack` / `npm publish` include them alongside the compiled TypeScript.
 //
-// First invocation pays a one-time libstd rebuild for the host triple
-// because the root `.cargo/config.toml` enables `-Zbuild-std` (pinned for
-// the emscripten target); subsequent calls hit cache.
+// This unified command performs two operations:
+// 1. Renders every bundled theme to `dist/themes/<id>.css` and regenerates
+//    the `src/themes.ts` index module via the host-native theme-codegen binary.
+// 2. Copies the runtime wasm + host wasm/mjs into `dist/runtime/` and
+//    `dist/host/` respectively.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
 import { Logger, paths, run, type Paths } from './util.js';
 import { writeThemesIndexModule, type ThemeIndexEntry } from './write-themes-index.js';
@@ -25,12 +22,17 @@ interface CodegenEntry {
     readonly foreground: string | null;
 }
 
+export async function stage(): Promise<void> {
+    await stageThemes();
+    await stageDist();
+}
+
 /**
  * Render every bundled theme to `dist/themes/<id>.css` and regenerate the
  * `src/themes.ts` index module. Returns the metadata entries written into
  * the index so callers can log or cross-check counts.
  */
-export async function stageThemes(): Promise<readonly ThemeIndexEntry[]> {
+async function stageThemes(): Promise<readonly ThemeIndexEntry[]> {
     const p = paths();
     const log = new Logger('stage-themes');
 
@@ -113,4 +115,46 @@ function invokeCodegen(binary: string, outDir: string): Promise<string> {
             else rejectPromise(new Error(`theme-codegen exited ${code}\n${err}`));
         });
     });
+}
+
+async function stageDist(): Promise<void> {
+    const p = paths();
+    const log = new Logger('stage-dist');
+    const hostSrcDir = p.hostWasmOut;
+    const hostWasm = join(hostSrcDir, 'web-tree-sitter.wasm');
+    const hostMjs = join(hostSrcDir, 'web-tree-sitter.mjs');
+
+    if (!existsSync(hostWasm) || !existsSync(hostMjs)) {
+        throw new Error(
+            `host wasm not found in ${hostSrcDir}. run \`arborium-rt build-host\` first.`,
+        );
+    }
+    if (!existsSync(p.runtimeWasm)) {
+        throw new Error(
+            `runtime wasm not found at ${p.runtimeWasm}. run \`cargo build --release\` first.`,
+        );
+    }
+
+    const distDir = join(p.runtimePackageDir, 'dist');
+    const hostDest = join(distDir, 'host');
+    const runtimeDest = join(distDir, 'runtime');
+    mkdirSync(hostDest, { recursive: true });
+    mkdirSync(runtimeDest, { recursive: true });
+
+    // Only ship the artifacts we distribute; leave .map files behind to keep
+    // the tarball tight. Consumers that want source maps can regenerate from
+    // the built runtime.
+    copyFileSync(hostWasm, join(hostDest, 'web-tree-sitter.wasm'));
+    copyFileSync(hostMjs, join(hostDest, 'web-tree-sitter.mjs'));
+    copyFileSync(p.runtimeWasm, join(runtimeDest, 'arborium_emscripten_runtime.wasm'));
+
+    log.step('staged assets:');
+    for (const file of [
+        join(hostDest, 'web-tree-sitter.wasm'),
+        join(hostDest, 'web-tree-sitter.mjs'),
+        join(runtimeDest, 'arborium_emscripten_runtime.wasm'),
+    ]) {
+        const size = statSync(file).size;
+        log.info(`    ${size.toString().padStart(10)}  ${relative(p.repoRoot, file)}`);
+    }
 }

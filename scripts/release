@@ -117,11 +117,8 @@ if [[ "${SKIP_BUILD}" -eq 0 ]]; then
     step "build-all (every grammar in the corpus)"
     ./scripts/arborium-rt build-all
 
-    step "stage-dist"
-    ./scripts/arborium-rt stage-dist
-
-    step "stage-themes"
-    ./scripts/arborium-rt stage-themes
+    step "stage"
+    ./scripts/arborium-rt stage
 
     step "pnpm -r build"
     pnpm -r build
