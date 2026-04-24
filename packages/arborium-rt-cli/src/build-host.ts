@@ -127,7 +127,7 @@ export async function buildHost(): Promise<void> {
         log,
         'emcc',
         [
-            '-O3', '--minify', '0',
+            '-O2', '--minify', '0',
             '-gsource-map=inline',
             '-fno-exceptions',
             '-std=c11',

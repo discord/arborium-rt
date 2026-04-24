@@ -92,7 +92,9 @@ pnpm --filter @discord/arborium-rt-plugin-rspack publish
 
 ### Prereqs the tooling expects on PATH
 
-- **emsdk 4.0.15** (`emcc`, `em++`, `llvm-objdump`). Source `emsdk_env.sh`.
+- **emsdk 4.0.15 or 5.x** (`emcc`, `em++`, `llvm-objdump`). Source `emsdk_env.sh`.
+  Emscripten 5.x is fully supported; the MAIN_MODULE build uses `-O2` to work
+  around a known `-O3` bug where `__stack_pointer` is incorrectly eliminated.
 - **Nightly Rust** with `rust-src` (for `-Zbuild-std`). A system/nix nightly
   works — rustup isn't required.
 - **tree-sitter CLI** (`cargo install tree-sitter-cli`), used by

@@ -124,7 +124,7 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
         const session = grammar.createSession();
         try {
             session.setText('[1, 2, 3]');
-            const spans = session.highlightToSpans();
+            const { spans } = session.highlightToSpans();
 
             // Numbers resolve to a single theme tag; the pipeline should
             // return three non-empty spans, one per digit.
@@ -155,13 +155,13 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
         try {
             session.setText('{"x": 42}');
 
-            const customElements = session.highlightToHtml();
+            const { html: customElements } = session.highlightToHtml();
             // Default format wraps captures in `<a-*>` tags. We assert only
             // that the output contains at least one such tag; the exact tag
             // depends on the theme-slot map which upstream owns.
             expect(customElements).toMatch(/<a-[a-z]+>/);
 
-            const withClasses = session.highlightToHtml({ format: { kind: 'class-names' } });
+            const { html: withClasses } = session.highlightToHtml({ format: { kind: 'class-names' } });
             expect(withClasses).toMatch(/<span class="[^"]+">/);
         } finally {
             session.free();
