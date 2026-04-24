@@ -52,7 +52,6 @@ function renderModule(entries: readonly Entry[]): string {
         '// Regenerated from the grammar subdirs currently under dist/grammars/.',
         '',
         'import type { ArboriumGrammarPackage } from \'./runtime.js\';',
-        'import type { AvailableLanguage } from \'./languages.js\';',
         '',
         '/**',
         ' * Every bundled grammar keyed by language id. Entries ship eagerly —',
@@ -76,7 +75,7 @@ function renderModule(entries: readonly Entry[]): string {
         }
         lines.push('    },');
     }
-    lines.push('} as const satisfies Record<AvailableLanguage, ArboriumGrammarPackage>;');
+    lines.push('} as const;');
     lines.push('');
     lines.push('/** Synonym for callers that want the package shape without the const narrowing. */');
     lines.push('export type BundledGrammarId = keyof typeof GRAMMARS;');
