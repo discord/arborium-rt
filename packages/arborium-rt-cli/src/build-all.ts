@@ -16,7 +16,6 @@ import { buildGrammarIndex } from './arborium-yaml.js';
 import { buildGrammar } from './build-grammar.js';
 import { buildPackage } from './build-package.js';
 import { Logger, paths, runPool } from './util.js';
-import { writeLanguagesModule } from './write-languages.js';
 
 export interface BuildAllArgs {
     /** If set, only try these grammar ids (for debugging). */
@@ -73,12 +72,6 @@ export async function buildAll(args: BuildAllArgs = {}): Promise<BuildAllResult>
             root.step(`[${n}/${targets.length}] fail ${id}`);
         }
     });
-
-    // Regenerate the languages.ts constant once after every package step is
-    // done — avoids the write race if buildPackage did it per-grammar.
-    if (!args.skipPackage) {
-        writeLanguagesModule();
-    }
 
     root.step(`summary: ok ${ok.length}/${targets.length}, failed ${failed.length}/${targets.length}`);
     if (failed.length > 0) {

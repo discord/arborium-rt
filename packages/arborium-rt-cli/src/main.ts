@@ -19,7 +19,6 @@ import { stageDist } from './stage-dist.js';
 import { stageThemes } from './stage-themes.js';
 import { Logger, paths } from './util.js';
 import { writeGrammarsIndexModule } from './write-grammars-index.js';
-import { writeLanguagesModule } from './write-languages.js';
 
 const USAGE = `\
 arborium-rt <subcommand> [options]
@@ -54,16 +53,16 @@ stage-dist have populated its dist/ directory.
 async function main(argv: readonly string[]): Promise<number> {
     const [cmd, ...rest] = argv;
     switch (cmd) {
-        case 'bootstrap':        await bootstrap(); return 0;
-        case 'build-host':       await buildHost(); return 0;
-        case 'build-grammar':    return cmdBuildGrammar(rest);
-        case 'package':          return cmdBuildPackage(rest);
-        case 'build':            return cmdBuild(rest);
-        case 'build-all':        return cmdBuildAll(rest);
-        case 'package-all':      return cmdPackageAll(rest);
-        case 'flatten-queries':  return cmdFlatten(rest);
-        case 'stage-dist':       await stageDist(); return 0;
-        case 'stage-themes':     await stageThemes(); return 0;
+        case 'bootstrap': await bootstrap(); return 0;
+        case 'build-host': await buildHost(); return 0;
+        case 'build-grammar': return cmdBuildGrammar(rest);
+        case 'package': return cmdBuildPackage(rest);
+        case 'build': return cmdBuild(rest);
+        case 'build-all': return cmdBuildAll(rest);
+        case 'package-all': return cmdPackageAll(rest);
+        case 'flatten-queries': return cmdFlatten(rest);
+        case 'stage-dist': await stageDist(); return 0;
+        case 'stage-themes': await stageThemes(); return 0;
         case '--help':
         case '-h':
         case undefined:
@@ -97,9 +96,6 @@ async function cmdBuildPackage(args: readonly string[]): Promise<number> {
         return 1;
     }
     await buildPackage({ group, lang });
-    // Regenerate the languages.ts constant + grammars index so they reflect
-    // the new subdir.
-    writeLanguagesModule();
     writeGrammarsIndexModule();
     return 0;
 }

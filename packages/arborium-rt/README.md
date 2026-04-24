@@ -67,7 +67,6 @@ plugin's package for details.
 | ----------------------- | ----------------------------------------------------------------------- |
 | `loadArboriumRuntime`   | Load the host + arborium SIDE_MODULE; returns a `Runtime`.              |
 | `GRAMMARS`              | Eager map of every bundled grammar keyed by language id.                |
-| `AVAILABLE_LANGUAGES`   | Readonly tuple of every grammar id — for pickers / validation.          |
 | `Runtime.loadGrammar`   | Load a grammar SIDE_MODULE, register it, return a `Grammar`.            |
 | `Grammar.createSession` | Open a session against this grammar.                                    |
 | `Grammar.unregister`    | Tear down the grammar + all its live sessions.                          |

@@ -214,7 +214,6 @@ call uses `-sENVIRONMENT=web,worker`; omitting that re-introduces the
 Node branch (`await import("module")`, bare `require("fs"|…)`) that rspack
 static-rejects. `write-grammars-index.ts` regenerates
 `packages/arborium-rt/src/grammars.ts` after `package`/`package-all`;
-`write-languages.ts` does the same for `src/languages.ts`.
 
 ### rsbuild integration test (`packages/arborium-rt-rsbuild-test/`)
 

@@ -30,8 +30,6 @@ export type {
     Edit,
 } from './types.js';
 
-export { AVAILABLE_LANGUAGES, type AvailableLanguage } from './languages.js';
-
 export { GRAMMARS, type BundledGrammarId } from './grammars.js';
 
 export { THEMES, type BundledThemeId, type ArboriumThemePackage } from './themes.js';

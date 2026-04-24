@@ -105,7 +105,6 @@ import { GRAMMARS, loadArboriumRuntime, AVAILABLE_LANGUAGES } from "@discord/arb
 
 const runtime = await loadArboriumRuntime();
 const grammar = await runtime.loadGrammar(GRAMMARS.typescript);
-// AVAILABLE_LANGUAGES exposes every id as a typed string union for pickers.
 ```
 
 Layout inside the package:
