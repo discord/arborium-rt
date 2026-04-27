@@ -28,9 +28,11 @@ Subcommands:
   build-grammar <group> <lang>       build tree-sitter-<lang>.wasm + flatten queries
   package <group> <lang>             generate dist/grammars/<lang>/ inside the runtime package
   build <group> <lang>               shorthand: build-grammar then package
-  build-all [--only a,b,c] [-j N]    build + package every grammar in the corpus
+  build-all [--only a,b,c] [--group group-X] [-j N]
+                                     build + package every grammar in the corpus
   package-all [--only a,b,c] [-j N]  regenerate dist/grammars/* from already-built grammars
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
+  list-groups [--json]               print arborium groups with at least one buildable grammar
   stage                              stage built host + runtime wasms into dist/ for publish/testing
   --help, -h                         this help text
   --version                          print the CLI version
@@ -59,6 +61,7 @@ async function main(argv: readonly string[]): Promise<number> {
         case 'build-all': return cmdBuildAll(rest);
         case 'package-all': return cmdPackageAll(rest);
         case 'flatten-queries': return cmdFlatten(rest);
+        case 'list-groups': return cmdListGroups(rest);
         case 'stage': await stage(); return 0;
         case '--help':
         case '-h':
@@ -109,6 +112,7 @@ async function cmdBuildAll(args: readonly string[]): Promise<number> {
         allowPositionals: true,
         options: {
             only: { type: 'string' },
+            group: { type: 'string' },
             'skip-package': { type: 'boolean', default: false },
             jobs: { type: 'string', short: 'j' },
         },
@@ -117,6 +121,7 @@ async function cmdBuildAll(args: readonly string[]): Promise<number> {
     const jobs = parseJobs(values.jobs);
     const result = await buildAll({
         ...(only && only.length > 0 ? { only } : {}),
+        ...(values.group ? { group: values.group } : {}),
         skipPackage: values['skip-package'] === true,
         ...(jobs !== undefined ? { jobs } : {}),
     });
@@ -150,6 +155,23 @@ function parseJobs(raw: string | undefined): number | undefined {
         throw new Error(`--jobs expects a positive integer, got ${JSON.stringify(raw)}`);
     }
     return n;
+}
+
+async function cmdListGroups(args: readonly string[]): Promise<number> {
+    const { values } = parseArgs({
+        args: [...args],
+        allowPositionals: false,
+        options: { json: { type: 'boolean', default: false } },
+    });
+    const p = paths();
+    const index = buildGrammarIndex(p.langsRoot);
+    const groups = [...new Set([...index.values()].map((e) => e.group))].sort();
+    if (values.json) {
+        process.stdout.write(`${JSON.stringify(groups)}\n`);
+    } else {
+        for (const g of groups) process.stdout.write(`${g}\n`);
+    }
+    return 0;
 }
 
 async function cmdFlatten(args: readonly string[]): Promise<number> {

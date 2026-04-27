@@ -1,0 +1,283 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+    outputs:
+      version:
+        description: arborium-rt version (from packages/arborium-rt/package.json)
+        value: ${{ jobs.package.outputs.version }}
+      tarball-name:
+        description: filename of the packed npm tarball
+        value: ${{ jobs.package.outputs.tarball-name }}
+      tarball-artifact:
+        description: name of the workflow artifact containing the .tgz tarball
+        value: ${{ jobs.package.outputs.tarball-artifact }}
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# `hostTriple()` in packages/arborium-rt-cli/src/util.ts: the patched
+# tree-sitter CLI lives at this path on a linux x64 runner. Both the
+# upload (in the prep job) and the download (in the grammars matrix)
+# need it.
+env:
+  TREE_SITTER_BIN_DIR: third_party/tree-sitter/target/x86_64-unknown-linux-gnu/release
+
+jobs:
+  # Single-shot job: bootstrap submodules, build the patched tree-sitter
+  # CLI, build the SIDE_MODULE runtime, build the MAIN_MODULE host. These
+  # outputs are corpus-independent and feed every grammar job.
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      groups: ${{ steps.list-groups.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-emscripten
+          components: rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install emsdk 4.0.15
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install 4.0.15
+          "$HOME/emsdk/emsdk" activate 4.0.15
+          source "$HOME/emsdk/emsdk_env.sh"
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EMSDK_NODE=$EMSDK_NODE" >> "$GITHUB_ENV"
+          echo "$EMSDK" >> "$GITHUB_PATH"
+          echo "$EMSDK/upstream/emscripten" >> "$GITHUB_PATH"
+          emcc --version
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Bootstrap submodule (patches + render Cargo.toml + build patched tree-sitter)
+        run: ./scripts/arborium-rt bootstrap
+
+      - name: Build runtime SIDE_MODULE
+        run: cargo build --release
+
+      - name: Build web-tree-sitter host (MAIN_MODULE)
+        run: ./scripts/arborium-rt build-host
+
+      # Drives the grammars matrix below — only groups with at least one
+      # buildable grammar (license-allowed, not in DISABLED_GRAMMARS).
+      - name: Enumerate arborium groups
+        id: list-groups
+        run: |
+          groups=$(./scripts/arborium-rt list-groups --json)
+          echo "groups=$groups" >> "$GITHUB_OUTPUT"
+          echo "found groups: $groups"
+
+      - name: Upload runtime wasm
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-wasm
+          path: target/wasm32-unknown-emscripten/release/arborium_emscripten_runtime.wasm
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload host wasm
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-wasm
+          path: |
+            target/host-wasm/web-tree-sitter.wasm
+            target/host-wasm/web-tree-sitter.mjs
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload patched tree-sitter CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: tree-sitter-cli
+          path: ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
+          if-no-files-found: error
+          retention-days: 7
+
+  # Per-arborium-group fan-out. Each job builds every grammar in its
+  # group and uploads target/grammars/<lang>/ for the package job to
+  # merge. No Rust toolchain here — `build-grammar` only needs emcc
+  # plus the patched tree-sitter CLI from `prep`.
+  grammars:
+    needs: prep
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.prep.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install emsdk 4.0.15
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install 4.0.15
+          "$HOME/emsdk/emsdk" activate 4.0.15
+          source "$HOME/emsdk/emsdk_env.sh"
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EMSDK_NODE=$EMSDK_NODE" >> "$GITHUB_ENV"
+          echo "$EMSDK" >> "$GITHUB_PATH"
+          echo "$EMSDK/upstream/emscripten" >> "$GITHUB_PATH"
+          emcc --version
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Download patched tree-sitter CLI
+        uses: actions/download-artifact@v4
+        with:
+          name: tree-sitter-cli
+          path: ${{ env.TREE_SITTER_BIN_DIR }}
+
+      - name: Make tree-sitter executable
+        run: chmod +x ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
+
+      - name: Build grammars in ${{ matrix.group }}
+        run: ./scripts/arborium-rt build-all --group ${{ matrix.group }}
+
+      # Each grammar's intermediate `build/` (parser.o, scanner.o, staged
+      # node_modules) lives under target/grammars/<lang>/build/ and balloons
+      # the artifact 5–10×. Only the wasm + flattened .scm files are needed
+      # downstream.
+      - name: Upload grammar artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: grammars-${{ matrix.group }}
+          path: |
+            target/grammars/
+            !target/grammars/*/build/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Aggregator: merge every group's grammar artifacts, stage host +
+  # runtime wasms, run package-all to populate dist/grammars/ and
+  # regenerate src/grammars.ts, then build, test, and pack the
+  # publishable tarball. Tarball is uploaded as an artifact so the
+  # publish workflow can consume it without rebuilding.
+  package:
+    needs: [prep, grammars]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tarball-name: ${{ steps.pack.outputs.tarball }}
+      tarball-artifact: ${{ steps.pack.outputs.artifact-name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Download runtime wasm
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-wasm
+          path: target/wasm32-unknown-emscripten/release
+
+      - name: Download host wasm
+        uses: actions/download-artifact@v4
+        with:
+          name: host-wasm
+          path: target/host-wasm
+
+      - name: Download all grammar artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: grammars-*
+          path: target/grammars
+          merge-multiple: true
+
+      - name: Stage host + runtime wasms into dist/
+        run: ./scripts/arborium-rt stage
+
+      - name: Package every grammar into dist/grammars/
+        run: ./scripts/arborium-rt package-all
+
+      - name: Annotate wasm sizes
+        run: |
+          {
+            echo "## Built wasm sizes"
+            echo ""
+            echo "| File | Size |"
+            echo "|------|------|"
+            find target/wasm32-unknown-emscripten/release/arborium_emscripten_runtime.wasm \
+                 target/host-wasm/web-tree-sitter.wasm \
+                 target/grammars -name '*.wasm' \
+              | sort \
+              | while read -r f; do
+                  bytes=$(stat -c %s "$f")
+                  human=$(numfmt --to=iec-i --suffix=B --format='%.2f' "$bytes")
+                  printf '| `%s` | %s (%s bytes) |\n' "$f" "$human" "$bytes"
+                done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build TypeScript packages
+        run: pnpm -r build
+
+      - name: Run tests
+        run: pnpm -r test
+
+      - name: Resolve version
+        id: meta
+        run: |
+          version=$(node -p "require('./packages/arborium-rt/package.json').version")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack tarball
+        id: pack
+        working-directory: packages/arborium-rt
+        run: |
+          pnpm pack --pack-destination "$GITHUB_WORKSPACE"
+          tarball="discord-arborium-rt-${{ steps.meta.outputs.version }}.tgz"
+          if [ ! -f "$GITHUB_WORKSPACE/$tarball" ]; then
+            echo "expected tarball not found: $tarball" >&2
+            ls "$GITHUB_WORKSPACE" >&2
+            exit 1
+          fi
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=arborium-rt-${{ steps.meta.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.artifact-name }}
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 14

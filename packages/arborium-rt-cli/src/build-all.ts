@@ -20,6 +20,8 @@ import { Logger, paths, runPool } from './util.js';
 export interface BuildAllArgs {
     /** If set, only try these grammar ids (for debugging). */
     only?: string[];
+    /** If set, only build grammars in this arborium group (e.g. `group-acorn`). */
+    group?: string;
     /** If set, don't run `package` after `build-grammar` (wasm + queries only). */
     skipPackage?: boolean;
     /** Max concurrent grammar builds. Defaults to `os.availableParallelism()`. */
@@ -35,9 +37,12 @@ export async function buildAll(args: BuildAllArgs = {}): Promise<BuildAllResult>
     const p = paths();
     const index = buildGrammarIndex(p.langsRoot);
 
-    const targets = (args.only && args.only.length > 0)
+    let targets = (args.only && args.only.length > 0)
         ? args.only.filter((id) => index.has(id))
         : [...index.keys()].sort();
+    if (args.group) {
+        targets = targets.filter((id) => index.get(id)?.group === args.group);
+    }
 
     const ok: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
