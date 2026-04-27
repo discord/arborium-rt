@@ -31,7 +31,7 @@ Subcommands:
   build-all [--only a,b,c] [-j N]    build + package every grammar in the corpus
   package-all [--only a,b,c] [-j N]  regenerate dist/grammars/* from already-built grammars
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
-  stage                              stage themes + built wasms into dist/ for publish/testing
+  stage                              stage built host + runtime wasms into dist/ for publish/testing
   --help, -h                         this help text
   --version                          print the CLI version
 

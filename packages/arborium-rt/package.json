@@ -15,8 +15,7 @@
     },
     "./host-module": "./dist/host/web-tree-sitter.mjs",
     "./host-wasm": "./dist/host/web-tree-sitter.wasm",
-    "./runtime-wasm": "./dist/runtime/arborium_emscripten_runtime.wasm",
-    "./themes/*.css": "./dist/themes/*.css"
+    "./runtime-wasm": "./dist/runtime/arborium_emscripten_runtime.wasm"
   },
   "imports": {
     "#wasm-loader": {
@@ -27,9 +26,6 @@
   },
   "files": [
     "dist"
-  ],
-  "sideEffects": [
-    "./dist/themes/*.css"
   ],
   "scripts": {
     "build": "tsc",

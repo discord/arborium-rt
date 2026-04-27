@@ -92,14 +92,6 @@ export interface Paths {
     /** `packages/arborium-rt-cli/` — this CLI's own package. */
     readonly cliPackageDir: string;
     readonly bindingRoot: string;
-    /**
-     * Output dir for per-theme `.css` files staged into the runtime package's
-     * `dist/themes/`. Referenced by the generated `dist/themes.js` via
-     * `new URL('./themes/<id>.css', import.meta.url)`.
-     */
-    readonly themesOut: string;
-    /** `crates/theme-codegen/` — host-native binary that emits theme CSS. */
-    readonly themeCodegenDir: string;
 }
 
 export function paths(repoRoot: string = findRepoRoot()): Paths {
@@ -126,8 +118,6 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
         ),
         runtimePackageDir: join(repoRoot, 'packages', 'arborium-rt'),
         cliPackageDir: join(repoRoot, 'packages', 'arborium-rt-cli'),
-        themesOut: join(repoRoot, 'packages', 'arborium-rt', 'dist', 'themes'),
-        themeCodegenDir: join(repoRoot, 'crates', 'theme-codegen'),
     };
 }
 

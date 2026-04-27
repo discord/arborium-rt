@@ -31,5 +31,3 @@ export type {
 } from './types.js';
 
 export { GRAMMARS, type BundledGrammarId } from './grammars.js';
-
-export { THEMES, type BundledThemeId, type ArboriumThemePackage } from './themes.js';
