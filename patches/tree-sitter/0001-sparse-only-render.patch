@@ -1,0 +1,166 @@
+From 54baf31257c3f2e9ad5bed6e752bc2bae87cd84c Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Mon, 27 Apr 2026 19:19:10 +0000
+Subject: [PATCH] Add TREE_SITTER_SPARSE_ONLY env var to render.rs
+
+---
+ crates/generate/src/render.rs | 117 +++++++++++++++++++++-------------
+ 1 file changed, 71 insertions(+), 46 deletions(-)
+
+diff --git a/crates/generate/src/render.rs b/crates/generate/src/render.rs
+index f47ed422..1b2ad95b 100644
+--- a/crates/generate/src/render.rs
++++ b/crates/generate/src/render.rs
+@@ -324,6 +324,17 @@ impl Generator {
+ 
+         // Determine which states should use the "small state" representation, and which should
+         // use the normal array representation.
++        //
++        // arborium-rt: when TREE_SITTER_SPARSE_ONLY is set, force every state into the
++        // sparse pool so the dense `ts_parse_table[LARGE_STATE_COUNT][SYMBOL_COUNT]`
++        // array isn't emitted. Trades parse-time speed for a large reduction in
++        // generated parser size — the runtime's `ts_language_lookup` already
++        // handles `large_state_count == 0` (every lookup goes through the sparse
++        // path; cf. tree-sitter `lib/src/language.h`).
++        if std::env::var_os("TREE_SITTER_SPARSE_ONLY").is_some() {
++            self.large_state_count = 0;
++            return;
++        }
+         let threshold = cmp::min(SMALL_STATE_THRESHOLD, self.parse_table.symbols.len() / 2);
+         self.large_state_count = self
+             .parse_table
+@@ -1299,63 +1310,70 @@ impl Generator {
+             &mut next_parse_action_list_index,
+         );
+ 
+-        add_line!(
+-            self,
+-            "static const uint16_t ts_parse_table[LARGE_STATE_COUNT][SYMBOL_COUNT] = {{",
+-        );
+-        indent!(self);
+-
++        // arborium-rt: skip emitting the dense `ts_parse_table` when no states
++        // are large — `[0][N]` is invalid C, and the language struct's
++        // `.parse_table` field below is also skipped, so the field defaults to
++        // NULL via C99 designated initializers. The runtime never dereferences
++        // `parse_table` when `large_state_count == 0`.
+         let mut terminal_entries = Vec::new();
+         let mut nonterminal_entries = Vec::new();
+ 
+-        for (i, state) in self
+-            .parse_table
+-            .states
+-            .iter()
+-            .enumerate()
+-            .take(self.large_state_count)
+-        {
+-            add_line!(self, "[STATE({i})] = {{");
++        if self.large_state_count > 0 {
++            add_line!(
++                self,
++                "static const uint16_t ts_parse_table[LARGE_STATE_COUNT][SYMBOL_COUNT] = {{",
++            );
+             indent!(self);
+ 
+-            // Ensure the entries are in a deterministic order, since they are
+-            // internally represented as a hash map.
+-            terminal_entries.clear();
+-            nonterminal_entries.clear();
+-            terminal_entries.extend(state.terminal_entries.iter());
+-            nonterminal_entries.extend(state.nonterminal_entries.iter());
+-            terminal_entries.sort_unstable_by_key(|e| self.symbol_order.get(e.0));
+-            nonterminal_entries.sort_unstable_by_key(|k| k.0);
++            for (i, state) in self
++                .parse_table
++                .states
++                .iter()
++                .enumerate()
++                .take(self.large_state_count)
++            {
++                add_line!(self, "[STATE({i})] = {{");
++                indent!(self);
+ 
+-            for (symbol, action) in &nonterminal_entries {
+-                add_line!(
+-                    self,
+-                    "[{}] = STATE({}),",
+-                    self.symbol_ids[symbol],
+-                    match action {
+-                        GotoAction::Goto(state) => *state,
+-                        GotoAction::ShiftExtra => i,
+-                    }
+-                );
+-            }
++                // Ensure the entries are in a deterministic order, since they are
++                // internally represented as a hash map.
++                terminal_entries.clear();
++                nonterminal_entries.clear();
++                terminal_entries.extend(state.terminal_entries.iter());
++                nonterminal_entries.extend(state.nonterminal_entries.iter());
++                terminal_entries.sort_unstable_by_key(|e| self.symbol_order.get(e.0));
++                nonterminal_entries.sort_unstable_by_key(|k| k.0);
+ 
+-            for (symbol, entry) in &terminal_entries {
+-                let entry_id = self.get_parse_action_list_id(
+-                    entry,
+-                    &mut parse_table_entries,
+-                    &mut next_parse_action_list_index,
+-                );
+-                add_line!(self, "[{}] = ACTIONS({entry_id}),", self.symbol_ids[symbol]);
++                for (symbol, action) in &nonterminal_entries {
++                    add_line!(
++                        self,
++                        "[{}] = STATE({}),",
++                        self.symbol_ids[symbol],
++                        match action {
++                            GotoAction::Goto(state) => *state,
++                            GotoAction::ShiftExtra => i,
++                        }
++                    );
++                }
++
++                for (symbol, entry) in &terminal_entries {
++                    let entry_id = self.get_parse_action_list_id(
++                        entry,
++                        &mut parse_table_entries,
++                        &mut next_parse_action_list_index,
++                    );
++                    add_line!(self, "[{}] = ACTIONS({entry_id}),", self.symbol_ids[symbol]);
++                }
++
++                dedent!(self);
++                add_line!(self, "}},");
+             }
+ 
+             dedent!(self);
+-            add_line!(self, "}},");
++            add_line!(self, "}};");
++            add_line!(self, "");
+         }
+ 
+-        dedent!(self);
+-        add_line!(self, "}};");
+-        add_line!(self, "");
+-
+         if self.large_state_count < self.parse_table.states.len() {
+             add_line!(self, "static const uint16_t ts_small_parse_table[] = {{");
+             indent!(self);
+@@ -1586,7 +1604,14 @@ impl Generator {
+         );
+ 
+         // Parse table
+-        add_line!(self, ".parse_table = &ts_parse_table[0][0],");
++        // arborium-rt: skip `.parse_table` when no large states — the array
++        // wasn't emitted, so `&ts_parse_table[0][0]` would fail to compile.
++        // C99 designated init defaults the omitted field to NULL, which is
++        // safe because the runtime never reads through it when
++        // `large_state_count == 0`.
++        if self.large_state_count > 0 {
++            add_line!(self, ".parse_table = &ts_parse_table[0][0],");
++        }
+         if self.large_state_count < self.parse_table.states.len() {
+             add_line!(self, ".small_parse_table = ts_small_parse_table,");
+             add_line!(self, ".small_parse_table_map = ts_small_parse_table_map,");
+-- 
+2.34.1
+

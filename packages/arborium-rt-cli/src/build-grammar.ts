@@ -38,10 +38,13 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
         throw new Error(`grammar.js not found at ${grammarJs}`);
     }
 
-    for (const cmd of ['emcc', 'tree-sitter']) {
-        if (!await hasCommand(cmd)) {
-            throw new Error(`${cmd} not found on PATH`);
-        }
+    if (!await hasCommand('emcc')) {
+        throw new Error(`emcc not found on PATH`);
+    }
+    if (!existsSync(p.treeSitterBin)) {
+        throw new Error(
+            `patched tree-sitter binary not found at ${p.treeSitterBin}; run \`./scripts/arborium-rt bootstrap\` first`,
+        );
     }
 
     const outDir = join(p.grammarsOut, args.lang);
@@ -90,10 +93,18 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
     // Stage both views so either pattern resolves.
     const stagedGrammarJs = stageGrammarSource(defDir, buildDir);
 
-    log.step(`generating parser.c from ${relative(p.repoRoot, grammarJs)}`);
-    await run(log, 'tree-sitter', ['generate', stagedGrammarJs], {
+    log.step(`generating parser.c from ${relative(p.repoRoot, grammarJs)} (sparse-only)`);
+    // TREE_SITTER_SPARSE_ONLY tells our patched tree-sitter render.rs to skip
+    // the dense `ts_parse_table[LARGE_STATE_COUNT][SYMBOL_COUNT]` array and
+    // route every state through `ts_small_parse_table`. Cuts parser.c output
+    // by ~30% and the linked SIDE_MODULE wasm by 50–75%, with a small parse-
+    // time cost the highlighting workload can absorb.
+    await run(log, p.treeSitterBin, ['generate', stagedGrammarJs], {
         cwd: buildDir,
-        ...(runEnv ? { env: runEnv } : {}),
+        env: {
+            ...runEnv,
+            TREE_SITTER_SPARSE_ONLY: '1',
+        },
     });
 
     // --- scanner detection ----------------------------------------------------

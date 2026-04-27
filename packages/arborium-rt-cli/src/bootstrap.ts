@@ -1,14 +1,15 @@
-// Arborium submodule setup: apply local patches to the working tree + render
-// Cargo.toml from Cargo.stpl.toml templates.
+// Submodule setup: apply local patches to each submodule's working tree,
+// render arborium's Cargo.toml templates, and build the patched tree-sitter
+// CLI used by `build-grammar`.
 //
 // Patches are applied via `git apply` (working-tree only — no commits, no
-// committer identity required). Each run resets the submodule to its pinned
-// upstream SHA first, so patches never stack.
+// committer identity required). Each run resets the submodules to their
+// pinned upstream SHAs first, so patches never stack.
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
-import { Logger, paths, run } from './util.js';
+import { Logger, hostTriple, paths, run } from './util.js';
 
 /** Local version string rendered into each `Cargo.toml` from its template. */
 const RENDER_VERSION = '0.0.0-arborium-rt';
@@ -19,11 +20,17 @@ export async function bootstrap(): Promise<void> {
 
     if (!existsSync(join(p.submoduleRoot, '.git'))) {
         throw new Error(
-            `submodule not checked out at ${p.submoduleRoot}; run: git submodule update --init --recursive`,
+            `arborium submodule not checked out at ${p.submoduleRoot}; run: git submodule update --init --recursive`,
+        );
+    }
+    if (!existsSync(join(p.treeSitterRoot, '.git'))) {
+        throw new Error(
+            `tree-sitter submodule not checked out at ${p.treeSitterRoot}; run: git submodule update --init --recursive`,
         );
     }
 
-    log.step('resetting submodule to its pinned commit');
+    // --- arborium submodule ---------------------------------------------------
+    log.step('resetting arborium submodule to its pinned commit');
     await run(log, 'git', [
         '-C', p.repoRoot,
         'submodule', 'update', '--init', '--force', 'third_party/arborium',
@@ -33,21 +40,7 @@ export async function bootstrap(): Promise<void> {
     // .gitignore covers, so a plain `clean -fd` leaves them behind and the
     // next bootstrap's `git apply` fails with "already exists".
     await run(log, 'git', ['-C', p.submoduleRoot, 'clean', '-fdx']);
-
-    const patches = readdirSync(p.patchesDir)
-        .filter((name) => name.endsWith('.patch'))
-        .sort();
-    for (const patch of patches) {
-        log.step(`applying ${patch}`);
-        // git apply tolerates the mbox `From:`/`Subject:` preamble — it
-        // reads the unified diff and ignores the commit metadata, so no
-        // committer identity is needed.
-        await run(log, 'git', [
-            '-C', p.submoduleRoot,
-            'apply', '--whitespace=nowarn',
-            join(p.patchesDir, patch),
-        ]);
-    }
+    await applyPatches(log, p.submoduleRoot, p.arboriumPatchesDir);
 
     log.step(`rendering Cargo.toml from Cargo.stpl.toml (version ${RENDER_VERSION})`);
     const cratesDir = join(p.submoduleRoot, 'crates');
@@ -62,7 +55,62 @@ export async function bootstrap(): Promise<void> {
     log.step('writing arborium-theme/src/builtin_generated.rs');
     writeArboriumThemeBuiltin(cratesDir);
 
+    // --- tree-sitter submodule + CLI build ------------------------------------
+    log.step('resetting tree-sitter submodule to its pinned commit');
+    await run(log, 'git', [
+        '-C', p.repoRoot,
+        'submodule', 'update', '--init', '--force', 'third_party/tree-sitter',
+    ]);
+    // Don't `-x`: tree-sitter's gitignored target/ holds incremental build
+    // state we want to keep across bootstraps. Patches only touch tracked
+    // files, so `clean -fd` is enough to undo a prior patch.
+    await run(log, 'git', ['-C', p.treeSitterRoot, 'clean', '-fd']);
+    await applyPatches(log, p.treeSitterRoot, p.treeSitterPatchesDir);
+
+    log.step(`building patched tree-sitter CLI -> ${p.treeSitterBin}`);
+    // The repo root's `.cargo/config.toml` pins target=wasm32-unknown-emscripten
+    // for the runtime crate; we need the host triple here, so override
+    // CARGO_BUILD_TARGET. Same hostTriple() helper that paths() uses, so the
+    // produced binary lands exactly where p.treeSitterBin expects.
+    await run(log, 'cargo', [
+        'build', '--release', '-p', 'tree-sitter-cli', '--bin', 'tree-sitter',
+    ], {
+        cwd: p.treeSitterRoot,
+        env: { CARGO_BUILD_TARGET: hostTriple() },
+    });
+    if (!existsSync(p.treeSitterBin)) {
+        throw new Error(
+            `expected tree-sitter binary at ${p.treeSitterBin} after build; cargo placed it elsewhere`,
+        );
+    }
+
     log.step('bootstrap complete.');
+}
+
+/**
+ * Apply every `*.patch` file in `patchesDir` (sorted by name) to the working
+ * tree of `submoduleRoot`. Patches are mbox-format `git format-patch` output;
+ * `git apply` tolerates the preamble and reads the unified diff body, so no
+ * committer identity is needed and nothing gets committed in the submodule.
+ */
+async function applyPatches(
+    log: Logger,
+    submoduleRoot: string,
+    patchesDir: string,
+): Promise<void> {
+    if (!existsSync(patchesDir)) return;
+    const patches = readdirSync(patchesDir)
+        .filter((name) => name.endsWith('.patch'))
+        .sort();
+    const dirLabel = basename(patchesDir);
+    for (const patch of patches) {
+        log.step(`applying ${dirLabel}/${patch}`);
+        await run(log, 'git', [
+            '-C', submoduleRoot,
+            'apply', '--whitespace=nowarn',
+            join(patchesDir, patch),
+        ]);
+    }
 }
 
 /**

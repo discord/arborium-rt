@@ -2,3 +2,7 @@
 	path = third_party/arborium
 	url = https://github.com/bearcove/arborium.git
 	ignore = dirty
+[submodule "third_party/tree-sitter"]
+	path = third_party/tree-sitter
+	url = https://github.com/tree-sitter/tree-sitter.git
+	ignore = dirty

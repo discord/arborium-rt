@@ -80,8 +80,10 @@ pnpm --filter @discord/arborium-rt publish
   around a known `-O3` bug where `__stack_pointer` is incorrectly eliminated.
 - **Nightly Rust** with `rust-src` (for `-Zbuild-std`). A system/nix nightly
   works — rustup isn't required.
-- **tree-sitter CLI** (`cargo install tree-sitter-cli`), used by
-  `build-grammar` to generate `parser.c` from `grammar.js`.
+- **tree-sitter CLI** — built locally from the patched submodule by
+  `bootstrap` (see "Submodules + patches"). `build-grammar` invokes that
+  binary, never any system-installed `tree-sitter`, because only the
+  patched build understands `TREE_SITTER_SPARSE_ONLY`.
 - **Node ≥20, pnpm ≥9**.
 
 ## High-level architecture
@@ -188,38 +190,58 @@ Node branch (`await import("module")`, bare `require("fs"|…)`) that rspack
 static-rejects. `write-grammars-index.ts` regenerates
 `packages/arborium-rt/src/grammars.ts` after `package`/`package-all`;
 
-### The arborium submodule + patches
+### Submodules + patches
 
-`third_party/arborium` is pinned to a specific commit (commit, not tag —
-`arborium-plugin-runtime` doesn't exist on any released tag yet). The
-root `Cargo.toml` path-deps four crates out of it:
+Two pinned submodules live under `third_party/`:
 
-- `arborium-plugin-runtime` — unpatched; unpublished upstream.
-- `arborium-tree-sitter` — **patched** to skip static tree-sitter C
-  linking on emscripten (the MAIN_MODULE resolves those symbols).
-- `arborium-wire` — unpatched; unpublished upstream.
-- `arborium-highlight`, `arborium-theme` — consumed with
-  `default-features = false` by the emscripten runtime. `arborium-theme`
-  is also consumed with the `toml` feature **on** by
-  `crates/theme-codegen` for publish-time CSS rendering.
+- **`third_party/arborium`** — pinned to a specific commit (commit, not
+  tag — `arborium-plugin-runtime` doesn't exist on any released tag yet).
+  The root `Cargo.toml` path-deps four crates out of it:
+    - `arborium-plugin-runtime` — unpatched; unpublished upstream.
+    - `arborium-tree-sitter` — **patched** to skip static tree-sitter C
+      linking on emscripten (the MAIN_MODULE resolves those symbols).
+    - `arborium-wire` — unpatched; unpublished upstream.
+    - `arborium-highlight`, `arborium-theme` — consumed with
+      `default-features = false` by the emscripten runtime.
+      `arborium-theme` is also consumed with the `toml` feature **on**
+      by `crates/theme-codegen` for publish-time CSS rendering.
+- **`third_party/tree-sitter`** — pinned to tag `v0.26.8`. Vendored so
+  we can build a **patched** `tree-sitter` CLI that emits sparse-only
+  parser tables. The patch (`patches/tree-sitter/0001-sparse-only-render.patch`)
+  adds a `TREE_SITTER_SPARSE_ONLY` env-var check in
+  `crates/generate/src/render.rs::populate_used_symbols_and_state_count`
+  that forces `large_state_count = 0`, plus two conditionals around
+  `add_parse_table` and the `TSLanguage` struct emit so the dense
+  `ts_parse_table[LARGE_STATE_COUNT][SYMBOL_COUNT]` array isn't written.
+  `build-grammar` runs the bootstrap-built binary at
+  `third_party/tree-sitter/target/<host>/release/tree-sitter` with the
+  env var set, **never** the system `tree-sitter`. Cuts the SIDE_MODULE
+  wasm by 50–78% on the largest grammars (verilog 17.3 → 4.4 MB,
+  cobol 11.8 → 2.5 MB, lean 17.3 → 8.7 MB, sql 9.4 → 3.7 MB) at the
+  cost of ~20% parse-time slowdown on big files — fine for highlighting,
+  which is one-shot per file. The arborium-tree-sitter runtime already
+  handles `large_state_count == 0` (every lookup goes through the
+  sparse path; cf. `crates/arborium-tree-sitter/src/language.h:78`).
 
-Patches live as mbox files in `patches/` (`git format-patch` output).
-They're all trivial target guards — no logic changes on any existing
-target.
+Patches live as mbox files under `patches/<submodule>/` (`git
+format-patch` output). All current patches are trivial target guards or
+opt-in codegen flags — no logic changes to existing behavior.
 
-`./scripts/arborium-rt bootstrap` is **idempotent**: it resets the
-submodule to the pinned SHA, `git apply`s each patch to the working
-tree (no commits — `git apply` ignores the mbox preamble, so no
-committer identity is required), renders every `Cargo.stpl.toml` →
-`Cargo.toml`, and writes
+`./scripts/arborium-rt bootstrap` is **idempotent**: it resets each
+submodule to its pinned SHA, `git apply`s every patch under
+`patches/<submodule>/` to the working tree (no commits — `git apply`
+ignores the mbox preamble, so no committer identity is required),
+renders every arborium `Cargo.stpl.toml` → `Cargo.toml`, writes
 `crates/arborium-theme/src/builtin_generated.rs` (gitignored upstream,
-normally produced by `cargo xtask gen`). Bootstrap enumerates the
+normally produced by `cargo xtask gen`), and builds the patched
+tree-sitter CLI with `CARGO_BUILD_TARGET=<host>` to override the repo
+root's emscripten-pinned cargo config. Bootstrap enumerates the
 submodule's `crates/arborium-theme/themes/*.toml` to emit a
 macro-driven file exposing one `pub fn <theme_id>()` per theme plus
 `all()` and the arborium-rt addition `all_with_ids()`; all gated on
 the crate's `toml` feature, so the runtime (default features off)
-still compiles to empty vectors. Re-run bootstrap after bumping the
-submodule or tweaking a patch.
+still compiles to empty vectors. Re-run bootstrap after bumping
+either submodule or tweaking a patch.
 
 ### Target layout
 
@@ -278,6 +300,14 @@ Expects all eleven entry points: `arborium_rt_abi_version`,
   vendored dep grammars' `def/grammar/` dirs into the build dir and
   exposing `NODE_PATH` — but only for grammars already in the
   arborium corpus. Third-party upstream deps are not yet wired up.
+- **Sparse-only parser tables.** `build-grammar` always sets
+  `TREE_SITTER_SPARSE_ONLY=1` when invoking the patched tree-sitter CLI.
+  The arborium-tree-sitter runtime treats that as the supported case —
+  every state lookup goes through `ts_small_parse_table` (cf.
+  `crates/arborium-tree-sitter/src/language.h:78`). To compare against
+  the dense layout, point `build-grammar` at an unpatched binary and
+  unset the env var; the wasm will be 2–4× larger but the parse tree
+  will be byte-identical.
 
 ## Conventions worth knowing
 

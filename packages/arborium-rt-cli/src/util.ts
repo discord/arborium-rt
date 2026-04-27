@@ -60,7 +60,22 @@ export interface Paths {
     readonly repoRoot: string;
     readonly submoduleRoot: string;
     readonly langsRoot: string;
-    readonly patchesDir: string;
+    /** Patches applied to the arborium submodule by `bootstrap`. */
+    readonly arboriumPatchesDir: string;
+    /**
+     * `third_party/tree-sitter/` — the upstream tree-sitter submodule. We
+     * vendor + patch it so we can build a `tree-sitter` CLI that emits
+     * sparse-only parser tables (see TREE_SITTER_SPARSE_ONLY in render.rs).
+     */
+    readonly treeSitterRoot: string;
+    /** Patches applied to the tree-sitter submodule by `bootstrap`. */
+    readonly treeSitterPatchesDir: string;
+    /**
+     * Path to the locally-built, patched tree-sitter CLI. `build-grammar`
+     * invokes this instead of any system-installed `tree-sitter` so the
+     * sparse-only env var actually has an effect.
+     */
+    readonly treeSitterBin: string;
     readonly targetDir: string;
     readonly grammarsOut: string;
     /**
@@ -88,12 +103,16 @@ export interface Paths {
 }
 
 export function paths(repoRoot: string = findRepoRoot()): Paths {
+    const treeSitterRoot = join(repoRoot, 'third_party', 'tree-sitter');
     return {
         repoRoot,
         submoduleRoot: join(repoRoot, 'third_party', 'arborium'),
         langsRoot: join(repoRoot, 'third_party', 'arborium', 'langs'),
         bindingRoot: join(repoRoot, 'third_party', 'arborium', 'crates', 'arborium-tree-sitter'),
-        patchesDir: join(repoRoot, 'patches'),
+        arboriumPatchesDir: join(repoRoot, 'patches', 'arborium'),
+        treeSitterRoot,
+        treeSitterPatchesDir: join(repoRoot, 'patches', 'tree-sitter'),
+        treeSitterBin: join(treeSitterRoot, 'target', hostTriple(), 'release', 'tree-sitter'),
         targetDir: join(repoRoot, 'target'),
         grammarsOut: join(repoRoot, 'target', 'grammars'),
         packagesOut: join(repoRoot, 'packages', 'arborium-rt', 'dist', 'grammars'),
@@ -110,6 +129,23 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
         themesOut: join(repoRoot, 'packages', 'arborium-rt', 'dist', 'themes'),
         themeCodegenDir: join(repoRoot, 'crates', 'theme-codegen'),
     };
+}
+
+/**
+ * Cargo's host triple, used to find the patched tree-sitter binary under
+ * `third_party/tree-sitter/target/<triple>/release/`. We always build with
+ * `CARGO_BUILD_TARGET=<host>` to override the repo's emscripten-pinned
+ * default in `.cargo/config.toml`, which means the binary lands under the
+ * triple-prefixed dir, not the bare `target/release/`.
+ */
+export function hostTriple(): string {
+    if (process.env['ARBORIUM_RT_HOST_TRIPLE']) return process.env['ARBORIUM_RT_HOST_TRIPLE'];
+    const arch = process.arch === 'x64' ? 'x86_64'
+        : process.arch === 'arm64' ? 'aarch64'
+        : process.arch;
+    if (process.platform === 'linux') return `${arch}-unknown-linux-gnu`;
+    if (process.platform === 'darwin') return `${arch}-apple-darwin`;
+    throw new Error(`unsupported host platform ${process.platform}/${process.arch}; set ARBORIUM_RT_HOST_TRIPLE`);
 }
 
 export interface RunOptions {
