@@ -1,6 +1,6 @@
 {
   "name": "@discord/arborium-rt",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Dynamically-linked tree-sitter + arborium runtime for the browser",
   "license": "MIT",
   "type": "module",
