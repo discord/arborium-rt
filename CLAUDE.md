@@ -111,13 +111,6 @@ The Rust SIDE_MODULE has three modules, each with a single job:
   `arborium_highlight::spans_to_html` so output stays lock-step with the
   native Rust highlighter.
 
-### ABI stability
-
-`ABI_VERSION` (in `src/lib.rs`, returned by `arborium_rt_abi_version()`) is
-the single integer consumers check on load. **Bump it on any breaking change**
-to a function signature, semantics, or the JSON payload shape. Also update
-the version-history block in `src/lib.rs` and the README.
-
 ### TypeScript consumer package (`packages/arborium-rt/`)
 
 Typed `Runtime` / `Grammar` / `Session` API over the ABI, published as
@@ -244,13 +237,12 @@ either submodule or tweaking a patch.
   | grep arborium_rt_
 ```
 
-Expects all eleven entry points: `arborium_rt_abi_version`,
-`arborium_rt_register_grammar`, `arborium_rt_unregister_grammar`,
-`arborium_rt_create_session`, `arborium_rt_free_session`,
-`arborium_rt_set_text`, `arborium_rt_cancel`, `arborium_rt_parse_utf16`,
-`arborium_rt_highlight_to_spans_utf16`, `arborium_rt_highlight_to_html`,
-`arborium_rt_free`. Anything missing means the
-`.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
+Expects all ten entry points: `arborium_rt_register_grammar`,
+`arborium_rt_unregister_grammar`, `arborium_rt_create_session`,
+`arborium_rt_free_session`, `arborium_rt_set_text`, `arborium_rt_cancel`,
+`arborium_rt_parse_utf16`, `arborium_rt_highlight_to_spans_utf16`,
+`arborium_rt_highlight_to_html`, `arborium_rt_free`. Anything missing
+means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
 
 ### Grammar build gotchas
 
