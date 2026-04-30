@@ -28,9 +28,17 @@ const KOTLIN_GRAMMAR_WASM = resolve(
     repoRoot,
     'target/grammars/kotlin/tree-sitter-kotlin.wasm',
 );
+// Read the flattened, post-bootstrap-patched highlights from target/grammars,
+// not the raw submodule source under third_party/arborium/. CI's `package`
+// job runs `actions/checkout@v4` with `submodules: recursive` (which fetches
+// the submodule at its pinned SHA) but does NOT run `arborium-rt bootstrap`
+// — only the upstream `prep` and `grammars` jobs do — so the submodule's
+// def/queries/ files in that job are unpatched. The grammars artifact
+// downloaded into target/grammars/ contains the post-patch, post-flatten
+// output and is what gets shipped in the published tarball.
 const KOTLIN_HIGHLIGHTS_SCM = resolve(
     repoRoot,
-    'third_party/arborium/langs/group-bark/kotlin/def/queries/highlights.scm',
+    'target/grammars/kotlin/highlights.scm',
 );
 
 describe('loadArboriumRuntime + Grammar + Session', () => {

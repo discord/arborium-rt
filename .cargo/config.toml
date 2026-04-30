@@ -19,5 +19,5 @@ rustflags = [
     "-C", "link-arg=-O2",
     # Every `arborium_rt_*` function the crate exposes must appear here; the
     # linker strips anything not listed when building a SIDE_MODULE.
-    "-C", "link-arg=-sEXPORTED_FUNCTIONS=_arborium_rt_abi_version,_arborium_rt_register_grammar,_arborium_rt_unregister_grammar,_arborium_rt_create_session,_arborium_rt_free_session,_arborium_rt_set_text,_arborium_rt_cancel,_arborium_rt_parse_utf16,_arborium_rt_highlight_to_spans_utf16,_arborium_rt_highlight_to_html,_arborium_rt_free",
+    "-C", "link-arg=-sEXPORTED_FUNCTIONS=_arborium_rt_register_grammar,_arborium_rt_unregister_grammar,_arborium_rt_create_session,_arborium_rt_free_session,_arborium_rt_set_text,_arborium_rt_cancel,_arborium_rt_parse_utf16,_arborium_rt_highlight_to_spans_utf16,_arborium_rt_highlight_to_html,_arborium_rt_free",
 ]
