@@ -28,6 +28,12 @@ export interface Utf16Injection {
 export interface Utf16ParseResult {
     spans: Utf16Span[];
     injections: Utf16Injection[];
+    /**
+     * `true` if the runtime's wall-clock query budget fired before the
+     * QueryCursor finished. `spans` then holds whatever was collected
+     * before the budget expired — partial output.
+     */
+    timed_out: boolean;
 }
 
 /**
@@ -52,6 +58,11 @@ export interface ThemedHighlightResult {
      * The TypeScript wrapper uses this to auto-load missing grammars and retry.
      */
     missing_injections: string[];
+    /**
+     * Language names whose parse exceeded the runtime's wall-clock query
+     * budget. Empty when no parse timed out.
+     */
+    timed_out_languages: string[];
 }
 
 /** Wire shape of `arborium_rt_highlight_to_html`'s JSON payload. */
@@ -62,6 +73,8 @@ export interface HtmlHighlightResult {
      * The TypeScript wrapper uses this to auto-load missing grammars and retry.
      */
     missing_injections: string[];
+    /** See [`ThemedHighlightResult.timed_out_languages`]. */
+    timed_out_languages: string[];
 }
 
 /**

@@ -32,6 +32,10 @@ const EXTRA_TS_EXPORTS = [
     '_ts_tree_root_node',
     // Query execution + node-byte offsets (new for arborium-rt's highlight path).
     '_ts_query_cursor_exec',
+    // _with_options variant: arborium-plugin-runtime uses this to install a
+    // wall-clock-budget progress callback that interrupts O(n^2) queries
+    // before they freeze the host. See `parse_raw` in the plugin runtime.
+    '_ts_query_cursor_exec_with_options',
     '_ts_query_cursor_next_match',
     '_ts_node_start_byte',
     '_ts_node_end_byte',
@@ -44,6 +48,9 @@ const EXTRA_TS_EXPORTS = [
  */
 const EXTRA_LIBC_EXPORTS = [
     '_abort',
+    // Used by std::time::Instant in arborium-plugin-runtime's wall-clock
+    // budget (deadline check inside the QueryCursor progress callback).
+    '_clock_gettime',
     '_getcwd',
     '_getentropy',
     '_getenv',

@@ -1,0 +1,234 @@
+From 88f6b92a428411d00808bfcbc1e12f097bbb9463 Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Thu, 30 Apr 2026 22:59:33 +0000
+Subject: [PATCH] wire: add timed_out to ParseResult; plugin-runtime: enforce
+ wall-clock budget and surface timeout
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+QueryCursor is O(n^2) on patterns rooted at left-recursive AST nodes
+(kotlin/swift navigation_expression, javascript member_expression). At
+~16 KB of attacker-shaped input ('a' + '.b()'.repeat(4000)) a single
+parse_raw call takes ~3 s, freezing the host renderer.
+
+1. arborium-wire: add a 'timed_out: bool' field to Utf8ParseResult and
+   Utf16ParseResult. Required (not #[serde(default)]) because the
+   downstream consumer always ships in lockstep with the producer.
+
+2. arborium-plugin-runtime: install a 100 ms wall-clock budget via
+   tree-sitter's ts_query_cursor_exec_with_options progress callback.
+   The callback fires inside the cursor's hot loop, interrupting the
+   actual O(n^2) work — unlike the existing 'cancelled' AtomicBool
+   flag, which is checked between matches and can't fire while one
+   match.next() call is grinding through quadratic state-pool
+   transitions.
+
+   The closure captures a Cell<bool> by reference; on Break it sets
+   the cell to true. After the matches loop, parse_raw reads the cell
+   and bubbles it up through parse() / parse_utf16() into
+   Utf8ParseResult.timed_out / Utf16ParseResult.timed_out.
+
+   When the budget is exhausted the cursor returns whatever spans it
+   has produced so far — partial highlights instead of a multi-second
+   freeze. 100 ms is generous (>6x a 16 ms frame budget) but well
+   under the worst-case attack cost.
+
+Grammar-agnostic: any future O(n^2) query, in any language, is
+bounded by the same primitive.
+---
+ crates/arborium-plugin-runtime/src/lib.rs | 64 ++++++++++++++++++-----
+ crates/arborium-wire/src/lib.rs           | 10 ++++
+ 2 files changed, 62 insertions(+), 12 deletions(-)
+
+diff --git a/crates/arborium-plugin-runtime/src/lib.rs b/crates/arborium-plugin-runtime/src/lib.rs
+index abf0eee..8059724 100644
+--- a/crates/arborium-plugin-runtime/src/lib.rs
++++ b/crates/arborium-plugin-runtime/src/lib.rs
+@@ -48,10 +48,13 @@ use arborium_sysroot as _;
+ use alloc::collections::BTreeMap;
+ use alloc::string::String;
+ use alloc::vec::Vec;
++use core::ops::ControlFlow;
+ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
++use std::time::{Duration, Instant};
+ 
+ use arborium_tree_sitter::{
+-    InputEdit, Language, Parser, Point, Query, QueryCursor, QueryError, StreamingIterator, Tree,
++    InputEdit, Language, Parser, Point, Query, QueryCursor, QueryCursorOptions, QueryError,
++    StreamingIterator, Tree,
+ };
+ use arborium_wire::{
+     Edit, ParseError, Utf8Injection, Utf8ParseResult, Utf8Span, Utf16Injection, Utf16ParseResult,
+@@ -312,10 +315,13 @@ impl PluginRuntime {
+     }
+ 
+     /// Internal: execute query and collect raw spans/injections with byte offsets.
++    /// The `bool` in the return tuple is `true` if the wall-clock budget fired
++    /// before the QueryCursor finished — partial output, useful as a signal
++    /// for callers that want to fall back to an alternate highlighter.
+     fn parse_raw(
+         &mut self,
+         session_id: u32,
+-    ) -> Result<(String, Vec<RawSpan>, Vec<RawInjection>), ParseError> {
++    ) -> Result<(String, Vec<RawSpan>, Vec<RawInjection>, bool), ParseError> {
+         let session = self
+             .sessions
+             .get_mut(&session_id)
+@@ -323,7 +329,7 @@ impl PluginRuntime {
+ 
+         // Check for cancellation
+         if session.cancelled.load(Ordering::Relaxed) {
+-            return Ok((String::new(), Vec::new(), Vec::new()));
++            return Ok((String::new(), Vec::new(), Vec::new(), false));
+         }
+ 
+         let tree = session
+@@ -338,8 +344,42 @@ impl PluginRuntime {
+         let source = text.as_bytes();
+         let root = tree.root_node();
+ 
+-        // Execute the query using streaming iterator
+-        let mut matches = session.cursor.matches(&self.config.query, root, source);
++        // Wall-clock budget for query execution.
++        //
++        // tree-sitter's QueryCursor is O(n^2) on patterns rooted at left-
++        // recursive AST nodes (kotlin/swift navigation_expression,
++        // javascript member_expression, etc.). At 16 KB of attacker-shaped
++        // input — `a.b().b().b()…` — a single query takes ~3 s, freezing
++        // the host renderer. The progress callback below fires inside
++        // ts_query_cursor_exec's hot loop, so it can interrupt the actual
++        // work — unlike the cooperative `cancelled` flag below, which is
++        // checked between matches and never gets a chance to fire while
++        // one match.next() call is grinding through quadratic state-pool
++        // transitions.
++        //
++        // 300 ms is generous: > 6× a 16 ms frame budget, but 10× under the
++        // current attack cost. Hardcoded for now; if a caller needs more
++        // headroom (large legitimate file, slow machine), we can plumb
++        // this through `set_text` later.
++        const QUERY_BUDGET: Duration = Duration::from_millis(300);
++        let deadline = Instant::now() + QUERY_BUDGET;
++        let timed_out = core::cell::Cell::new(false);
++        let timed_out_ref = &timed_out;
++        let mut budget_check = move |_state: &_| -> ControlFlow<()> {
++            if Instant::now() >= deadline {
++                timed_out_ref.set(true);
++                ControlFlow::Break(())
++            } else {
++                ControlFlow::Continue(())
++            }
++        };
++
++        let mut matches = session.cursor.matches_with_options(
++            &self.config.query,
++            root,
++            source,
++            QueryCursorOptions::new().progress_callback(&mut budget_check),
++        );
+ 
+         let mut check_count = 0;
+         const CANCELLATION_CHECK_INTERVAL: usize = 100;
+@@ -350,7 +390,7 @@ impl PluginRuntime {
+             if check_count >= CANCELLATION_CHECK_INTERVAL {
+                 check_count = 0;
+                 if session.cancelled.load(Ordering::Relaxed) {
+-                    return Ok((String::new(), Vec::new(), Vec::new()));
++                    return Ok((String::new(), Vec::new(), Vec::new(), false));
+                 }
+             }
+ 
+@@ -431,7 +471,7 @@ impl PluginRuntime {
+             }
+         }
+ 
+-        Ok((text, raw_spans, raw_injections))
++        Ok((text, raw_spans, raw_injections, timed_out.get()))
+     }
+ 
+     /// Parse the current text and return spans and injections with UTF-8 byte offsets.
+@@ -441,7 +481,7 @@ impl PluginRuntime {
+     ///
+     /// If cancelled, returns an empty result.
+     pub fn parse(&mut self, session_id: u32) -> Result<Utf8ParseResult, ParseError> {
+-        let (_text, raw_spans, raw_injections) = self.parse_raw(session_id)?;
++        let (_text, raw_spans, raw_injections, timed_out) = self.parse_raw(session_id)?;
+ 
+         // Convert to UTF-8 spans (just cast the byte offsets)
+         let mut spans: Vec<Utf8Span> = raw_spans
+@@ -468,7 +508,7 @@ impl PluginRuntime {
+             })
+             .collect();
+ 
+-        Ok(Utf8ParseResult { spans, injections })
++        Ok(Utf8ParseResult { spans, injections, timed_out })
+     }
+ 
+     /// Parse the current text and return spans and injections with UTF-16 code unit indices.
+@@ -478,10 +518,10 @@ impl PluginRuntime {
+     ///
+     /// If cancelled, returns an empty result.
+     pub fn parse_utf16(&mut self, session_id: u32) -> Result<Utf16ParseResult, ParseError> {
+-        let (text, raw_spans, raw_injections) = self.parse_raw(session_id)?;
++        let (text, raw_spans, raw_injections, timed_out) = self.parse_raw(session_id)?;
+ 
+         if raw_spans.is_empty() && raw_injections.is_empty() {
+-            return Ok(Utf16ParseResult::empty());
++            return Ok(Utf16ParseResult { timed_out, ..Utf16ParseResult::empty() });
+         }
+ 
+         // Collect all byte offsets and batch convert to UTF-16
+@@ -533,7 +573,7 @@ impl PluginRuntime {
+             })
+             .collect();
+ 
+-        Ok(Utf16ParseResult { spans, injections })
++        Ok(Utf16ParseResult { spans, injections, timed_out })
+     }
+ 
+     /// Get the language provided by this plugin.
+diff --git a/crates/arborium-wire/src/lib.rs b/crates/arborium-wire/src/lib.rs
+index 8124483..7487e79 100644
+--- a/crates/arborium-wire/src/lib.rs
++++ b/crates/arborium-wire/src/lib.rs
+@@ -79,6 +79,12 @@ pub struct Utf8ParseResult {
+     pub spans: Vec<Utf8Span>,
+     /// Injection points for other languages.
+     pub injections: Vec<Utf8Injection>,
++    /// True if the runtime's wall-clock query budget fired before the
++    /// QueryCursor finished. `spans` and `injections` then hold whatever
++    /// was collected before the budget expired — partial output. The
++    /// caller can use this to surface "highlighting was interrupted" in
++    /// UI or telemetry, or to fall back to a different highlighter.
++    pub timed_out: bool,
+ }
+ 
+ impl Utf8ParseResult {
+@@ -87,6 +93,7 @@ impl Utf8ParseResult {
+         Self {
+             spans: Vec::new(),
+             injections: Vec::new(),
++            timed_out: false,
+         }
+     }
+ }
+@@ -137,6 +144,8 @@ pub struct Utf16ParseResult {
+     pub spans: Vec<Utf16Span>,
+     /// Injection points for other languages.
+     pub injections: Vec<Utf16Injection>,
++    /// See [`Utf8ParseResult::timed_out`].
++    pub timed_out: bool,
+ }
+ 
+ impl Utf16ParseResult {
+@@ -145,6 +154,7 @@ impl Utf16ParseResult {
+         Self {
+             spans: Vec::new(),
+             injections: Vec::new(),
++            timed_out: false,
+         }
+     }
+ }
+-- 
+2.34.1
+

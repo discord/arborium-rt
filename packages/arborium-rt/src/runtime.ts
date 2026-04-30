@@ -135,6 +135,23 @@ export interface HighlightSpansResult {
      * If non-empty, the caller may want to load these grammars and retry.
      */
     missingInjections: string[];
+    /**
+     * Language names whose parse exceeded the runtime's per-call wall-clock
+     * query budget (~100 ms, enforced inside the QueryCursor's hot loop)
+     * before the cursor finished. Empty when nothing timed out. When
+     * non-empty, `spans` contains whatever the cursor produced before the
+     * budget expired — partial output.
+     *
+     * The list is per-language because injections highlight independently:
+     * highlighting markdown that injects a kotlin code block can produce
+     * `["kotlin"]` (kotlin's chain-bomb-shaped query timed out) while the
+     * markdown frame around it completed normally. Use the language to
+     * tag metrics, render a per-grammar "interrupted" badge, or fall back
+     * an alternate highlighter only for the affected language.
+     *
+     * Sorted, deduplicated.
+     */
+    timedOutLanguages: string[];
 }
 
 /** Result from {@link Session.highlightToHtml} including any missing injection grammars. */
@@ -146,6 +163,8 @@ export interface HighlightHtmlResult {
      * If non-empty, the caller may want to load these grammars and retry.
      */
     missingInjections: string[];
+    /** See {@link HighlightSpansResult.timedOutLanguages}. */
+    timedOutLanguages: string[];
 }
 
 /**
@@ -305,7 +324,7 @@ export class Session {
                 this.grammar.runtime.abi.arborium_rt_parse_utf16(this.id, outPtr, outLen),
             (json) =>
                 (json.length === 0
-                    ? { spans: [], injections: [] }
+                    ? { spans: [], injections: [], timed_out: false }
                     : (JSON.parse(json) as Utf16ParseResult)),
         );
     }
@@ -331,7 +350,9 @@ export class Session {
                     outLen,
                 ),
             (json) => {
-                if (json.length === 0) return { spans: [], missing_injections: [] };
+                if (json.length === 0) {
+                    return { spans: [], missing_injections: [], timed_out_languages: [] };
+                }
                 return JSON.parse(json) as ThemedHighlightResult;
             },
         );
@@ -339,6 +360,7 @@ export class Session {
         return {
             spans: result.spans,
             missingInjections: result.missing_injections,
+            timedOutLanguages: result.timed_out_languages,
         };
     }
 
@@ -372,7 +394,9 @@ export class Session {
                         outLen,
                     ),
                 (json) => {
-                    if (json.length === 0) return { html: '', missing_injections: [] };
+                    if (json.length === 0) {
+                        return { html: '', missing_injections: [], timed_out_languages: [] };
+                    }
                     return JSON.parse(json) as HtmlHighlightResult;
                 },
             );
@@ -380,6 +404,7 @@ export class Session {
             return {
                 html: result.html,
                 missingInjections: result.missing_injections,
+                timedOutLanguages: result.timed_out_languages,
             };
         } finally {
             if (prefixPtr) host._free(prefixPtr);

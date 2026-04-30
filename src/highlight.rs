@@ -52,6 +52,15 @@ pub(crate) struct WireThemedOutput {
     /// Languages referenced by injection queries but not loaded in the
     /// registry. JavaScript can use this to auto-load grammars and retry.
     pub missing_injections: Vec<String>,
+    /// Language names whose parse exceeded the runtime's wall-clock query
+    /// budget. Empty when no parse timed out. When non-empty, `spans`
+    /// contains whatever the cursor produced before the budget expired
+    /// — partial output. Consumers can use this to fall back to an
+    /// alternate highlighter, log a metric tagged by language, or
+    /// surface "interrupted" in UI per-grammar (e.g. "markdown
+    /// highlighting was complete but the injected kotlin block was
+    /// truncated"). Sorted; deduplicated.
+    pub timed_out_languages: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -60,6 +69,8 @@ pub(crate) struct WireHtmlOutput {
     /// Languages referenced by injection queries but not loaded in the
     /// registry. JavaScript can use this to auto-load grammars and retry.
     pub missing_injections: Vec<String>,
+    /// See [`WireThemedOutput::timed_out_languages`].
+    pub timed_out_languages: Vec<String>,
 }
 
 pub(crate) fn highlight_to_themed_utf16(
@@ -67,13 +78,14 @@ pub(crate) fn highlight_to_themed_utf16(
     session_id: u32,
     max_depth: u32,
 ) -> Result<WireThemedOutput, HighlightError> {
-    let (source, raw_spans, missing) = collect_spans(reg, session_id, max_depth)?;
+    let (source, raw_spans, missing, timed_out) = collect_spans(reg, session_id, max_depth)?;
 
     let themed_byte = dedup_and_tag(raw_spans);
     if themed_byte.is_empty() {
         return Ok(WireThemedOutput {
             spans: Vec::new(),
             missing_injections: missing.into_iter().collect(),
+            timed_out_languages: sorted(timed_out),
         });
     }
     let coalesced = coalesce_by_tag(themed_byte);
@@ -82,6 +94,7 @@ pub(crate) fn highlight_to_themed_utf16(
     Ok(WireThemedOutput {
         spans,
         missing_injections: missing.into_iter().collect(),
+        timed_out_languages: sorted(timed_out),
     })
 }
 
@@ -91,11 +104,21 @@ pub(crate) fn highlight_to_html(
     max_depth: u32,
     format: HtmlFormat,
 ) -> Result<WireHtmlOutput, HighlightError> {
-    let (source, raw_spans, missing) = collect_spans(reg, session_id, max_depth)?;
+    let (source, raw_spans, missing, timed_out) = collect_spans(reg, session_id, max_depth)?;
     Ok(WireHtmlOutput {
         html: spans_to_html(&source, raw_spans, &format),
         missing_injections: missing.into_iter().collect(),
+        timed_out_languages: sorted(timed_out),
     })
+}
+
+/// Drain a HashSet<String> into a deterministically-ordered Vec<String>.
+/// Sorted output keeps wire payloads stable across runs (helpful for
+/// snapshot tests and metric aggregation).
+fn sorted(set: HashSet<String>) -> Vec<String> {
+    let mut v: Vec<String> = set.into_iter().collect();
+    v.sort();
+    v
 }
 
 /// Walk the primary session + injections recursively. Returns the primary
@@ -107,7 +130,7 @@ fn collect_spans(
     reg: &mut Registry,
     session_id: u32,
     max_depth: u32,
-) -> Result<(String, Vec<Span>, HashSet<String>), HighlightError> {
+) -> Result<(String, Vec<Span>, HashSet<String>, HashSet<String>), HighlightError> {
     let (primary_gid, primary_inner, source) = {
         let entry = reg
             .session(session_id)
@@ -117,15 +140,20 @@ fn collect_spans(
 
     let mut all_spans: Vec<Span> = Vec::new();
     let mut missing_injections: HashSet<String> = HashSet::new();
+    let mut timed_out_languages: HashSet<String> = HashSet::new();
 
     let primary_injections = {
         let grammar = reg
             .grammar_mut(primary_gid)
             .ok_or(HighlightError::UnknownSession)?;
+        let primary_language = grammar.language_name.clone();
         let result = grammar
             .runtime
             .parse(primary_inner)
             .map_err(|_| HighlightError::Parse)?;
+        if result.timed_out {
+            timed_out_languages.insert(primary_language);
+        }
         for s in result.spans {
             all_spans.push(Span {
                 start: s.start,
@@ -147,10 +175,11 @@ fn collect_spans(
             depth,
             &mut all_spans,
             &mut missing_injections,
+            &mut timed_out_languages,
         );
     }
 
-    Ok((source, all_spans, missing_injections))
+    Ok((source, all_spans, missing_injections, timed_out_languages))
 }
 
 fn process_injections(
@@ -161,6 +190,7 @@ fn process_injections(
     remaining_depth: u32,
     all_spans: &mut Vec<Span>,
     missing_injections: &mut HashSet<String>,
+    timed_out_languages: &mut HashSet<String>,
 ) {
     if remaining_depth == 0 {
         return;
@@ -199,6 +229,9 @@ fn process_injections(
         };
 
         let shift = base_offset + inj.start;
+        if inj_result.timed_out {
+            timed_out_languages.insert(inj.language.clone());
+        }
         for s in inj_result.spans {
             all_spans.push(Span {
                 start: s.start + shift,
@@ -217,6 +250,7 @@ fn process_injections(
                 remaining_depth - 1,
                 all_spans,
                 missing_injections,
+                timed_out_languages,
             );
         }
     }
