@@ -1,0 +1,130 @@
+From 3eefe9fce92f83630cd0c516dfd6d7607467106c Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Thu, 30 Apr 2026 19:01:23 +0000
+Subject: [PATCH 2/3] kotlin/highlights.scm: rewrite chain-method patterns to
+ be O(n)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The four (call_expression …) patterns that match chained method calls
+were O(n^2) on deeply chained input (~3 s on 16 KB), because the
+QueryCursor descended into the left-recursive navigation_expression
+at every nested call_expression. Rewrite to be genuinely O(n):
+
+1. The chain-method-name pattern
+       (call_expression (navigation_expression
+           (navigation_suffix (simple_identifier) @function))))
+   becomes a non-descending scope capture
+       (call_expression . (navigation_expression) @callable.chain)
+   which captures the whole receiver-chain navigation_expression as a
+   single span and lets the highlight pipeline retag any
+   @property capture whose end byte coincides with this scope's end
+   byte (= the last navigation_suffix in the chain = the actual call
+   target) into @function. Same final captures, O(n) work.
+
+2. The three regex-call patterns (toRegex/Regex/Regex.fromLiteral)
+   gain leading-` . ` first-child anchors at every nesting level.
+   For chain-shaped input the anchored slot is occupied by a
+   navigation_expression (not a string_literal or simple_identifier),
+   so the structural match short-circuits at every call_expression
+   and these rules are O(n). They keep their @string.regex captures
+   intact.
+
+Verified end-to-end: depth=8000 chain (32 KB input) drops from
+12.3 s to 48 ms (256x), and capture distribution on a realistic
+kotlin file is byte-identical after the pipeline post-process pass.
+
+The companion arborium-rt change in src/highlight.rs implements the
+post-process upgrade. Without that pipeline change this commit
+removes the @function highlight on chained method names; with it,
+@function highlighting is fully preserved.
+---
+ .../kotlin/def/queries/highlights.scm         | 48 +++++++++++++++----
+ 1 file changed, 40 insertions(+), 8 deletions(-)
+
+diff --git a/langs/group-bark/kotlin/def/queries/highlights.scm b/langs/group-bark/kotlin/def/queries/highlights.scm
+index a0df0a2..c040faf 100644
+--- a/langs/group-bark/kotlin/def/queries/highlights.scm
++++ b/langs/group-bark/kotlin/def/queries/highlights.scm
+@@ -135,10 +135,24 @@
+ 	. (simple_identifier) @function)
+ 
+ ; object.function() or object.property.function()
++;
++; Capture the receiver chain as a scope, not the function-name identifier
++; itself. The runtime then upgrades any (navigation_suffix (simple_identifier))
++; @property capture whose end byte coincides with this scope's end byte
++; (i.e. is the last suffix in the chain — the actual call target) into
++; @function.
++;
++; Why: matching the function name directly with
++;   (call_expression (navigation_expression (navigation_suffix
++;     (simple_identifier) @function)))
++; is O(n^2) on deeply-chained calls because the QueryCursor descends into
++; the left-recursive navigation_expression at every nested call_expression
++; (~3 s on a 16 KB chain). Capturing the navigation_expression node as a
++; whole with no inner pattern keeps the matcher at O(1) per call_expression
++; — the leading `.` anchor pins it to the first-child slot — so the entire
++; rule is O(n).
+ (call_expression
+-	(navigation_expression
+-		(navigation_suffix
+-			(simple_identifier) @function) . ))
++	. (navigation_expression) @callable.chain)
+ 
+ (call_expression
+ 	. (simple_identifier) @function.builtin
+@@ -218,16 +232,28 @@
+ 
+ ; There are 3 ways to define a regex
+ ;    - "[abc]?".toRegex()
++;
++; Both anchors are necessary: the outer `.` pins the navigation_expression
++; to call_expression's first-child slot; the inner `.` pins the
++; string_literal to the navigation_expression's first-child slot. Together
++; they short-circuit the structural match at every call_expression in a
++; deeply-chained input (where the first child is a navigation_expression,
++; not a string_literal), keeping this rule O(n).
+ (call_expression
+-	(navigation_expression
+-		((string_literal) @string.regex)
++	. (navigation_expression
++		. ((string_literal) @string.regex)
+ 		(navigation_suffix
+ 			((simple_identifier) @_function
+ 			(#eq? @_function "toRegex")))))
+ 
+ ;    - Regex("[abc]?")
++;
++; Leading `.` anchor — for chain-shaped input the first child of
++; call_expression is a navigation_expression (not a simple_identifier),
++; so the structural match short-circuits at every call_expression and
++; this rule is O(n).
+ (call_expression
+-	((simple_identifier) @_function
++	. ((simple_identifier) @_function
+ 	(#eq? @_function "Regex"))
+ 	(call_suffix
+ 		(value_arguments
+@@ -235,9 +261,15 @@
+ 				(string_literal) @string.regex))))
+ 
+ ;   - Regex.fromLiteral("[abc]?")
++;
++; Both anchors: outer `.` pins navigation_expression to first-child of
++; call_expression; inner `.` pins simple_identifier to first-child of
++; navigation_expression. For chain-shaped input the inner first-child is
++; another navigation_expression, so the structural match short-circuits
++; and this rule is O(n).
+ (call_expression
+-	(navigation_expression
+-		((simple_identifier) @_class
++	. (navigation_expression
++		. ((simple_identifier) @_class
+ 		(#eq? @_class "Regex"))
+ 		(navigation_suffix
+ 			((simple_identifier) @_function
+-- 
+2.34.1
+

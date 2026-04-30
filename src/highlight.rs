@@ -26,6 +26,25 @@ use crate::registry::Registry;
 /// value — prevents pathological grammars from blowing the stack.
 const MAX_INJECTION_DEPTH: u32 = 32;
 
+/// Scaffolding capture name used by grammars whose AST puts the call-target
+/// identifier inside a left-recursive node (kotlin/swift navigation_expression).
+/// Direct query patterns like
+///   (call_expression (navigation_expression (navigation_suffix (simple_identifier) @function)))
+/// are O(n^2) on chained calls because the QueryCursor descends the recursion.
+/// Instead the grammars capture the receiver chain as a whole node:
+///   (call_expression . (navigation_expression) @callable.chain)
+/// (which is O(n) — the inner pattern doesn't descend), and this pipeline
+/// retags any `@property` / `@variable.member` capture whose end byte equals
+/// a `@callable.chain` capture's end byte (= last suffix in the chain =
+/// the actual call target) into `@function` / `@function.call`.
+///
+/// The capture name does NOT start with `_`: arborium-plugin-runtime's
+/// `parse_raw` drops underscore-prefixed captures before they reach the
+/// spans Vec, which would prevent this pass from ever seeing the
+/// scaffolding capture. `callable.chain` has no theme-tag mapping in
+/// arborium-theme, so it's stripped at dedup time after this pass uses it.
+const CALLABLE_CHAIN_CAPTURE: &str = "callable.chain";
+
 #[derive(Debug)]
 pub(crate) enum HighlightError {
     UnknownSession,
@@ -67,7 +86,8 @@ pub(crate) fn highlight_to_themed_utf16(
     session_id: u32,
     max_depth: u32,
 ) -> Result<WireThemedOutput, HighlightError> {
-    let (source, raw_spans, missing) = collect_spans(reg, session_id, max_depth)?;
+    let (source, mut raw_spans, missing) = collect_spans(reg, session_id, max_depth)?;
+    apply_call_context_upgrades(&mut raw_spans);
 
     let themed_byte = dedup_and_tag(raw_spans);
     if themed_byte.is_empty() {
@@ -91,11 +111,47 @@ pub(crate) fn highlight_to_html(
     max_depth: u32,
     format: HtmlFormat,
 ) -> Result<WireHtmlOutput, HighlightError> {
-    let (source, raw_spans, missing) = collect_spans(reg, session_id, max_depth)?;
+    let (source, mut raw_spans, missing) = collect_spans(reg, session_id, max_depth)?;
+    apply_call_context_upgrades(&mut raw_spans);
     Ok(WireHtmlOutput {
         html: spans_to_html(&source, raw_spans, &format),
         missing_injections: missing.into_iter().collect(),
     })
+}
+
+/// See [`CALLABLE_CHAIN_CAPTURE`] for the rationale.
+///
+/// Builds a set of end-byte positions from `_callable.chain` capture spans
+/// and retags any `@property` (kotlin) / `@variable.member` (swift) span
+/// whose end byte coincides with one of those positions — that span is the
+/// last navigation_suffix in the chain, which means it's the function being
+/// called rather than a property access along the way. After retagging,
+/// the scaffolding `_callable.chain` spans are dropped (they have no theme
+/// tag of their own and would be filtered by `tag_for_capture` anyway, but
+/// dropping early keeps later passes shorter).
+///
+/// O(n + m) time, O(c) space where c is the number of chain captures.
+fn apply_call_context_upgrades(spans: &mut Vec<Span>) {
+    let chain_ends: HashSet<u32> = spans
+        .iter()
+        .filter(|s| s.capture == CALLABLE_CHAIN_CAPTURE)
+        .map(|s| s.end)
+        .collect();
+    if chain_ends.is_empty() {
+        spans.retain(|s| s.capture != CALLABLE_CHAIN_CAPTURE);
+        return;
+    }
+    for span in spans.iter_mut() {
+        if !chain_ends.contains(&span.end) {
+            continue;
+        }
+        match span.capture.as_str() {
+            "property" => span.capture = String::from("function"),
+            "variable.member" => span.capture = String::from("function.call"),
+            _ => {}
+        }
+    }
+    spans.retain(|s| s.capture != CALLABLE_CHAIN_CAPTURE);
 }
 
 /// Walk the primary session + injections recursively. Returns the primary

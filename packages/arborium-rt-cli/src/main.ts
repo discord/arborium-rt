@@ -23,7 +23,11 @@ const USAGE = `\
 arborium-rt <subcommand> [options]
 
 Subcommands:
-  bootstrap                          apply local patches + render submodule Cargo.toml
+  bootstrap [--skip-tree-sitter-cli] apply local patches + render submodule Cargo.toml
+                                     (and build the patched tree-sitter CLI unless
+                                     --skip-tree-sitter-cli is passed; pass it when an
+                                     externally-built binary is already on disk, e.g. CI
+                                     downloaded the prep-job artifact)
   build-host                         build web-tree-sitter.{wasm,mjs} (MAIN_MODULE)
   build-grammar <group> <lang>       build tree-sitter-<lang>.wasm + flatten queries
   package <group> <lang>             generate dist/grammars/<lang>/ inside the runtime package
@@ -53,7 +57,7 @@ stage have populated its dist/ directory.
 async function main(argv: readonly string[]): Promise<number> {
     const [cmd, ...rest] = argv;
     switch (cmd) {
-        case 'bootstrap': await bootstrap(); return 0;
+        case 'bootstrap': return cmdBootstrap(rest);
         case 'build-host': await buildHost(); return 0;
         case 'build-grammar': return cmdBuildGrammar(rest);
         case 'package': return cmdBuildPackage(rest);
@@ -75,6 +79,17 @@ async function main(argv: readonly string[]): Promise<number> {
             process.stderr.write(`unknown subcommand: ${cmd}\n\n${USAGE}`);
             return 1;
     }
+}
+
+async function cmdBootstrap(args: readonly string[]): Promise<number> {
+    const { values } = parseArgs({
+        args: [...args],
+        options: {
+            'skip-tree-sitter-cli': { type: 'boolean', default: false },
+        },
+    });
+    await bootstrap({ skipTreeSitterCli: values['skip-tree-sitter-cli'] });
+    return 0;
 }
 
 async function cmdBuildGrammar(args: readonly string[]): Promise<number> {

@@ -1,0 +1,101 @@
+From 783d984cc339dc50568a02414ad50e8028ad1cd4 Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Thu, 30 Apr 2026 19:01:26 +0000
+Subject: [PATCH 3/3] swift/highlights.scm: rewrite chain-method and
+ chain-property patterns to be O(n)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two structural rewrites in lockstep with the kotlin patch:
+
+1. The chained method-call pattern
+       (call_expression (navigation_expression
+           (navigation_suffix (simple_identifier) @function.call))))
+   becomes a non-descending scope capture
+       (call_expression . (navigation_expression) @callable.chain)
+   that the highlight pipeline post-process uses to retag any
+   @variable.member capture whose end byte coincides with the
+   chain's end byte (= last navigation_suffix in the chain = the
+   actual call target) into @function.call. Final captures are
+   identical; the QueryCursor stops descending into the recursive
+   navigation_expression and the rule is O(n).
+
+2. The chained property-access pattern
+       (navigation_expression
+           suffix: (navigation_suffix
+               suffix: (simple_identifier) @variable.member))
+   re-roots from navigation_expression (left-recursive in this
+   grammar — a.b.c parses as nav_expr(nav_expr(a,b),c)) to
+   navigation_suffix (non-recursive). In this grammar
+   navigation_suffix only appears as a child of navigation_expression,
+   so the set of matched nodes is unchanged but the rule is now O(n).
+
+Verified end-to-end: depth=4000 chain (16 KB input) drops from
+2.6 s to single-digit ms, and capture distribution on a realistic
+swift file is preserved after the pipeline post-process upgrades
+@variable.member to @function.call where appropriate.
+---
+ .../swift/def/queries/highlights.scm          | 34 +++++++++++++------
+ 1 file changed, 24 insertions(+), 10 deletions(-)
+
+diff --git a/langs/group-pine/swift/def/queries/highlights.scm b/langs/group-pine/swift/def/queries/highlights.scm
+index 82ad68d..ece75d5 100644
+--- a/langs/group-pine/swift/def/queries/highlights.scm
++++ b/langs/group-pine/swift/def/queries/highlights.scm
+@@ -115,9 +115,16 @@
+   (pattern
+     (simple_identifier) @variable.member))
+ 
+-(navigation_expression
+-  (navigation_suffix
+-    (simple_identifier) @variable.member))
++; Root at navigation_suffix instead of navigation_expression. The
++; navigation_expression node is left-recursive (a.b.c parses as
++; nav_expr(nav_expr(a, b), c)), so any pattern rooted there walks
++; the recursion and is O(n^2) in chain depth — even with field
++; accessors. navigation_suffix is non-recursive, so rooting here is
++; O(n). In this grammar navigation_suffix only ever appears as a
++; child of navigation_expression, so dropping the wrapper does not
++; change which nodes match.
++(navigation_suffix
++  suffix: (simple_identifier) @variable.member)
+ 
+ (value_argument
+   name: (value_argument_label
+@@ -136,18 +143,25 @@
+       (type_identifier) @attribute)))
+ 
+ ; Function calls
++;
++; The chained method call rule (foo.bar.baz()) captures the receiver
++; chain as a scope, not the function-name identifier itself. The runtime
++; then upgrades any (navigation_suffix suffix: (simple_identifier))
++; @variable.member capture whose end byte coincides with this scope's
++; end byte (i.e. is the last suffix in the chain — the actual call
++; target) into @function.call. See kotlin/highlights.scm for details.
++;
++; The other two call rules (direct call, prefix-expression call) match
++; non-recursive shapes and are O(n) with just the leading `.` anchor.
+ (call_expression
+-  (simple_identifier) @function.call) ; foo()
++  . (simple_identifier) @function.call) ; foo()
+ 
+ (call_expression
+-  ; foo.bar.baz(): highlight the baz()
+-  (navigation_expression
+-    (navigation_suffix
+-      (simple_identifier) @function.call)))
++  . (navigation_expression) @callable.chain) ; foo.bar.baz()
+ 
+ (call_expression
+-  (prefix_expression
+-    (simple_identifier) @function.call)) ; .foo()
++  . (prefix_expression
++    target: (simple_identifier) @function.call)) ; .foo()
+ 
+ ((navigation_expression
+   (simple_identifier) @type) ; SomeType.method(): highlight SomeType as a type
+-- 
+2.34.1
+

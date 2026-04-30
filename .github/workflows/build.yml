@@ -163,6 +163,17 @@ jobs:
       - name: Make tree-sitter executable
         run: chmod +x ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
 
+      # The grammars job runs `actions/checkout@v4` afresh, so the submodule
+      # tree is at its pinned SHA without any `patches/arborium/*.patch`
+      # applied. Skip this and `build-grammar` flattens the *upstream*
+      # queries/highlights.scm — any downstream patch (e.g. the kotlin /
+      # swift O(n²) chain-method DoS fix) silently drops out of the
+      # shipped grammar artifact. `--skip-tree-sitter-cli` reuses the
+      # patched tree-sitter binary downloaded from `prep` instead of
+      # spending ~30 s rebuilding it per matrix shard.
+      - name: Bootstrap submodule (apply patches; reuse prep's tree-sitter CLI)
+        run: ./scripts/arborium-rt bootstrap --skip-tree-sitter-cli
+
       - name: Build grammars in ${{ matrix.group }}
         run: ./scripts/arborium-rt build-all --group ${{ matrix.group }}
 

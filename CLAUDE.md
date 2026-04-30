@@ -111,13 +111,6 @@ The Rust SIDE_MODULE has three modules, each with a single job:
   `arborium_highlight::spans_to_html` so output stays lock-step with the
   native Rust highlighter.
 
-### ABI stability
-
-`ABI_VERSION` (in `src/lib.rs`, returned by `arborium_rt_abi_version()`) is
-the single integer consumers check on load. **Bump it on any breaking change**
-to a function signature, semantics, or the JSON payload shape. Also update
-the version-history block in `src/lib.rs` and the README.
-
 ### TypeScript consumer package (`packages/arborium-rt/`)
 
 Typed `Runtime` / `Grammar` / `Session` API over the ABI, published as
@@ -207,6 +200,18 @@ Patches live as mbox files under `patches/<submodule>/` (`git
 format-patch` output). All current patches are trivial target guards or
 opt-in codegen flags — no logic changes to existing behavior.
 
+**Never commit inside `third_party/<submodule>/`.** All downstream
+modifications to a submodule's tracked files belong in
+`patches/<submodule>/NNNN-<title>.patch`, applied to the working tree
+by `bootstrap` via `git apply` (no commits, no committer identity
+required). The submodule pointer in this repo must stay at the upstream
+pinned SHA — letting it move forward to a local commit makes the
+parent commit unreachable from upstream and bypasses the patch
+mechanism. To capture an iterative edit as a patch, edit the file in
+the submodule's working tree, test, then write the diff into a new
+mbox file under `patches/<submodule>/` (either by hand or via
+`git format-patch` from a temp commit that you discard afterward).
+
 `./scripts/arborium-rt bootstrap` is **idempotent**: it resets each
 submodule to its pinned SHA, `git apply`s every patch under
 `patches/<submodule>/` to the working tree (no commits — `git apply`
@@ -244,8 +249,8 @@ either submodule or tweaking a patch.
   | grep arborium_rt_
 ```
 
-Expects all eleven entry points: `arborium_rt_abi_version`,
-`arborium_rt_register_grammar`, `arborium_rt_unregister_grammar`,
+Expects all ten entry points: `arborium_rt_register_grammar`,
+`arborium_rt_unregister_grammar`,
 `arborium_rt_create_session`, `arborium_rt_free_session`,
 `arborium_rt_set_text`, `arborium_rt_cancel`, `arborium_rt_parse_utf16`,
 `arborium_rt_highlight_to_spans_utf16`, `arborium_rt_highlight_to_html`,

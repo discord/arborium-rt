@@ -20,14 +20,8 @@ use std::slice;
 
 use arborium_tree_sitter::Language;
 
-use crate::ABI_VERSION;
 use crate::highlight::{decode_format, highlight_to_html, highlight_to_themed_utf16};
 use crate::registry::registry;
-
-#[unsafe(no_mangle)]
-pub extern "C" fn arborium_rt_abi_version() -> u32 {
-    ABI_VERSION
-}
 
 /// Register a grammar by its `*const TSLanguage` (obtained from the grammar
 /// side module's `tree_sitter_<lang>()` export), its language name (used

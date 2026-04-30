@@ -151,8 +151,6 @@ const runtime = await Module.loadWebAssemblyModule(
   await fetch("arborium_emscripten_runtime.wasm").then((r) => r.arrayBuffer()),
   { loadAsync: true },
 );
-if (runtime.arborium_rt_abi_version() !== 2)
-  throw new Error("arborium_rt ABI mismatch");
 
 const json = await Module.loadWebAssemblyModule(
   await fetch("tree-sitter-json.wasm").then((r) => r.arrayBuffer()),

@@ -24,6 +24,22 @@ const JSON_HIGHLIGHTS_SCM = resolve(
     repoRoot,
     'third_party/arborium/langs/group-acorn/json/def/queries/highlights.scm',
 );
+const KOTLIN_GRAMMAR_WASM = resolve(
+    repoRoot,
+    'target/grammars/kotlin/tree-sitter-kotlin.wasm',
+);
+// Read the flattened, post-bootstrap-patched highlights from target/grammars,
+// not the raw submodule source under third_party/arborium/. CI's `package`
+// job runs `actions/checkout@v4` with `submodules: recursive` (which fetches
+// the submodule at its pinned SHA) but does NOT run `arborium-rt bootstrap`
+// — only the upstream `prep` and `grammars` jobs do — so the submodule's
+// def/queries/ files in that job are unpatched. The grammars artifact
+// downloaded into target/grammars/ contains the post-patch, post-flatten
+// output and is what gets shipped in the published tarball.
+const KOTLIN_HIGHLIGHTS_SCM = resolve(
+    repoRoot,
+    'target/grammars/kotlin/highlights.scm',
+);
 
 describe('loadArboriumRuntime + Grammar + Session', () => {
     it('parses JSON and emits number spans for literal digits', async () => {
@@ -167,5 +183,95 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
             session.free();
             grammar.unregister();
         }
+    });
+
+    // Regression coverage for the kotlin chain-method DoS (CVSS 4.0 / VA:H).
+    // Two things this exercises that the JSON tests don't:
+    //
+    //   1. The `callable.chain` scaffolding capture is consumed by the
+    //      pipeline's `apply_call_context_upgrades` pass and never appears
+    //      in user-visible output.
+    //   2. The chain `obj.foo().bar()` is genuinely O(n): the highlight
+    //      query runs in single-digit ms even at 4000 chained calls — i.e.
+    //      `(call_expression (navigation_expression (navigation_suffix …)))`
+    //      is no longer driving `ts_query_cursor_exec` quadratic.
+    describe('kotlin: chain-method highlighting + DoS regression', () => {
+        const loadKotlin = async () => {
+            const [grammarWasm, highlights] = await Promise.all([
+                readFile(KOTLIN_GRAMMAR_WASM),
+                readFile(KOTLIN_HIGHLIGHTS_SCM, 'utf8'),
+            ]);
+            const runtime = await loadArboriumRuntime();
+            const grammar = await runtime.loadGrammar({
+                // Kotlin's grammar exposes external_scanner_* helpers alongside
+                // the canonical `tree_sitter_kotlin` symbol; disambiguate.
+                languageId: 'kotlin',
+                languageExport: 'tree_sitter_kotlin',
+                wasm: grammarWasm,
+                highlights,
+            });
+            return { runtime, grammar };
+        };
+
+        it('upgrades chained method names from @property to @function', async () => {
+            const { grammar } = await loadKotlin();
+            const session = grammar.createSession();
+            try {
+                // `obj.x.y()` — `y` is the call target; `x` is a chain-internal
+                // property access. Pipeline post-process should retag the
+                // simple_identifier ending at the same byte as the receiver
+                // chain (= `y`) into @function (theme tag "f"), while `x`
+                // stays @property (theme tag "pr").
+                const src = 'fun f() { obj.x.y() }\n';
+                session.setText(src);
+                const { spans } = session.highlightToSpans();
+                const yStart = src.indexOf('.y(') + 1;
+                const yEnd = yStart + 1;
+                const xStart = src.indexOf('.x.') + 1;
+                const xEnd = xStart + 1;
+
+                const ySpan = spans.find((s) => s.start === yStart && s.end === yEnd);
+                const xSpan = spans.find((s) => s.start === xStart && s.end === xEnd);
+
+                // The pipeline strips the `callable.chain` scaffolding
+                // capture entirely — it has no theme tag and exists only to
+                // drive the post-process upgrade.
+                expect(spans.find((s) => s.tag === 'callable.chain')).toBeUndefined();
+
+                // Call target retagged to @function; chain-internal property
+                // stays @property. Theme tags from `arborium_theme::tag_for_capture`
+                // ("f" = function, "pr" = property).
+                expect(ySpan?.tag).toBe('f');
+                expect(xSpan?.tag).toBe('pr');
+            } finally {
+                session.free();
+                grammar.unregister();
+            }
+        });
+
+        it('runs a 4000-deep chain in well under 1 s (was 3 s pre-fix)', async () => {
+            const { grammar } = await loadKotlin();
+            const session = grammar.createSession();
+            try {
+                const depth = 4000;
+                const raw = 'a' + '.b()'.repeat(depth);
+                const lines: string[] = [];
+                for (let i = 0; i < raw.length; i += 950) {
+                    lines.push(raw.slice(i, i + 950));
+                }
+                session.setText(lines.join('\n'));
+                const start = performance.now();
+                const { spans } = session.highlightToSpans();
+                const elapsed = performance.now() - start;
+                // Pre-fix: ~3000 ms. Post-fix (Path 2): ~30 ms. We pad
+                // generously to keep the test stable across machines without
+                // letting a regression to O(n^2) sneak through.
+                expect(elapsed).toBeLessThan(500);
+                expect(spans.length).toBeGreaterThan(0);
+            } finally {
+                session.free();
+                grammar.unregister();
+            }
+        });
     });
 });

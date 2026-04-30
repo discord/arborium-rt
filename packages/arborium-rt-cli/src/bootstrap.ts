@@ -7,6 +7,12 @@
 // Patches are applied via `git apply` (working-tree only — no commits, no
 // committer identity required). Each run resets the submodules to their
 // pinned upstream SHAs first, so patches never stack.
+//
+// The patched-tree-sitter-CLI build (~30 s in a cold cargo cache) is the
+// only expensive step. CI's per-group `grammars` matrix calls
+// `bootstrap --skip-tree-sitter-cli` so each shard reuses the CLI
+// artifact uploaded by `prep` instead of rebuilding it N times. The
+// rest of bootstrap is sub-second.
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -16,7 +22,17 @@ import { Logger, hostTriple, paths, run } from './util.js';
 /** Local version string rendered into each `Cargo.toml` from its template. */
 const RENDER_VERSION = '0.0.0-arborium-rt';
 
-export async function bootstrap(): Promise<void> {
+export interface BootstrapOptions {
+    /**
+     * Skip the cargo build of the patched tree-sitter CLI. Patches still
+     * get applied to `third_party/tree-sitter/`. Use when an externally
+     * provided binary already lives at `paths().treeSitterBin` (e.g. CI
+     * downloads the artifact uploaded by an earlier job).
+     */
+    skipTreeSitterCli?: boolean;
+}
+
+export async function bootstrap(options: BootstrapOptions = {}): Promise<void> {
     const p = paths();
     const log = new Logger('bootstrap');
 
@@ -65,21 +81,25 @@ export async function bootstrap(): Promise<void> {
     await run(log, 'git', ['-C', p.treeSitterRoot, 'clean', '-fd']);
     await applyPatches(log, p.treeSitterRoot, p.treeSitterPatchesDir);
 
-    log.step(`building patched tree-sitter CLI -> ${p.treeSitterBin}`);
-    // The repo root's `.cargo/config.toml` pins target=wasm32-unknown-emscripten
-    // for the runtime crate; we need the host triple here, so override
-    // CARGO_BUILD_TARGET. Same hostTriple() helper that paths() uses, so the
-    // produced binary lands exactly where p.treeSitterBin expects.
-    await run(log, 'cargo', [
-        'build', '--release', '-p', 'tree-sitter-cli', '--bin', 'tree-sitter',
-    ], {
-        cwd: p.treeSitterRoot,
-        env: { CARGO_BUILD_TARGET: hostTriple() },
-    });
-    if (!existsSync(p.treeSitterBin)) {
-        throw new Error(
-            `expected tree-sitter binary at ${p.treeSitterBin} after build; cargo placed it elsewhere`,
-        );
+    if (options.skipTreeSitterCli) {
+        log.step(`skipping patched tree-sitter CLI build (--skip-tree-sitter-cli)`);
+    } else {
+        log.step(`building patched tree-sitter CLI -> ${p.treeSitterBin}`);
+        // The repo root's `.cargo/config.toml` pins target=wasm32-unknown-emscripten
+        // for the runtime crate; we need the host triple here, so override
+        // CARGO_BUILD_TARGET. Same hostTriple() helper that paths() uses, so the
+        // produced binary lands exactly where p.treeSitterBin expects.
+        await run(log, 'cargo', [
+            'build', '--release', '-p', 'tree-sitter-cli', '--bin', 'tree-sitter',
+        ], {
+            cwd: p.treeSitterRoot,
+            env: { CARGO_BUILD_TARGET: hostTriple() },
+        });
+        if (!existsSync(p.treeSitterBin)) {
+            throw new Error(
+                `expected tree-sitter binary at ${p.treeSitterBin} after build; cargo placed it elsewhere`,
+            );
+        }
     }
 
     log.step('bootstrap complete.');
