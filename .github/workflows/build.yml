@@ -229,6 +229,16 @@ jobs:
       - name: Stage host + runtime wasms into dist/
         run: ./scripts/arborium-rt stage
 
+      # Required by `package-all` for THIRD_PARTY_NOTICES regeneration —
+      # the notices generator shells out to `askalono crawl` to identify
+      # upstream license files at each grammar's pinned commit. Action
+      # caches the built binary so warm runs are near-instant.
+      - name: Install askalono CLI
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: askalono-cli
+          version: "0.5.0"
+
       - name: Package every grammar into dist/grammars/
         run: ./scripts/arborium-rt package-all
 

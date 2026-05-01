@@ -34,6 +34,7 @@ Subcommands:
   package-all [--only a,b,c] [-j N]  regenerate dist/grammars/* from already-built grammars
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
   list-groups [--json]               print arborium groups with at least one buildable grammar
+  notices                            regenerate THIRD_PARTY_NOTICES (shallow-clones every upstream + askalono)
   stage                              stage built host + runtime wasms into dist/ for publish/testing
   --help, -h                         this help text
   --version                          print the CLI version
@@ -63,6 +64,7 @@ async function main(argv: readonly string[]): Promise<number> {
         case 'package-all': return cmdPackageAll(rest);
         case 'flatten-queries': return cmdFlatten(rest);
         case 'list-groups': return cmdListGroups(rest);
+        case 'notices': await writeThirdPartyNotices(); return 0;
         case 'stage': await stage(); return 0;
         case '--help':
         case '-h':
@@ -98,7 +100,7 @@ async function cmdBuildPackage(args: readonly string[]): Promise<number> {
     }
     await buildPackage({ group, lang });
     writeGrammarsIndexModule();
-    writeThirdPartyNotices();
+    await writeThirdPartyNotices();
     return 0;
 }
 

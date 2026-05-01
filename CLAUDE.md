@@ -83,6 +83,12 @@ pnpm --filter @discord/arborium-rt publish
   binary, never any system-installed `tree-sitter`, because only the
   patched build understands `TREE_SITTER_SPARSE_ONLY`.
 - **Node ≥20, pnpm ≥9**.
+- **askalono CLI** (`askalono` ≥ 0.5). Used by `arborium-rt notices` to
+  identify upstream license files via `askalono crawl`. The CLI ships
+  with its license-detection cache embedded, so no extra setup is
+  required beyond having it on PATH. Install via
+  `cargo install --locked askalono-cli` or download a prebuilt binary
+  from https://github.com/jpeddicord/askalono/releases.
 
 ## High-level architecture
 

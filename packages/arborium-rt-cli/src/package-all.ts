@@ -71,7 +71,7 @@ export async function packageAll(args: PackageAllArgs = {}): Promise<PackageAllR
     // One regeneration after every subdir is written — avoids the write
     // race that per-grammar calls would have under parallelism.
     writeGrammarsIndexModule();
-    writeThirdPartyNotices();
+    await writeThirdPartyNotices();
 
     root.step(`regenerated ${ok.length}/${targets.length} grammar subpath(s)`);
     if (failed.length > 0) {

@@ -238,6 +238,45 @@ function pipePrefixed(stream: NodeJS.ReadableStream | null, tag: string): void {
   });
 }
 
+/**
+ * Like `run`, but buffers the child's stdout and returns it as a string
+ * instead of forwarding it to the parent stderr. Stderr is still
+ * line-tagged through the logger. Use for tools whose stdout is data
+ * the caller needs to parse (e.g. `askalono crawl`'s JSON stream).
+ */
+export async function runCapture(
+  logger: Logger,
+  cmd: string,
+  args: readonly string[],
+  options: RunOptions = {},
+): Promise<string> {
+  return await new Promise<string>((resolvePromise, rejectPromise) => {
+    const wantsInput = options.input !== undefined;
+    const child = spawn(cmd, args as string[], {
+      cwd: options.cwd,
+      env: options.env ? { ...process.env, ...options.env } : process.env,
+      stdio: [wantsInput ? "pipe" : "ignore", "pipe", "pipe"],
+    });
+    if (wantsInput) {
+      child.stdin?.end(options.input);
+    }
+    let stdout = "";
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    pipePrefixed(child.stderr, `[${logger.prefix}] `);
+    child.once("error", rejectPromise);
+    child.once("close", (code) => {
+      if (code === 0) resolvePromise(stdout);
+      else
+        rejectPromise(
+          new Error(`${cmd} ${args.join(" ")} exited with code ${code}`),
+        );
+    });
+  });
+}
+
 /** Equivalent of `command -v` — returns true if the tool is on PATH. */
 export async function hasCommand(cmd: string): Promise<boolean> {
   return await new Promise<boolean>((resolvePromise) => {

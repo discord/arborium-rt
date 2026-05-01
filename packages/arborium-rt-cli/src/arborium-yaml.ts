@@ -15,11 +15,19 @@ const ALLOWED_LICENSES = [
     'Apache-2.0 WITH LLVM-exception',
 ];
 
-const DISABLED_GRAMMARS = new Set<string>([
-    'cobol', // has performance issues
-    'nginx', // GPL licensed
-    'uiua', // MPL licensed
-])
+/**
+ * Grammars excluded from the corpus, keyed by id with a free-form reason.
+ * Anything that filters grammars (the build pipeline, the notices
+ * generator, future tools) should consult this single map rather than
+ * maintain a parallel skip list.
+ */
+export const DISABLED_GRAMMARS: Record<string, string> = {
+    cobol: 'has performance issues',
+    nginx: 'GPL licensed',
+    uiua: 'MPL licensed',
+    prolog: 'manifest claims MIT but upstream LICENSE is AGPL-3.0; copyleft contamination, cannot ship',
+    vb: 'upstream repo ships no LICENSE file; cannot attribute',
+}
 
 
 export interface ArboriumYaml {
@@ -112,7 +120,7 @@ function scanRoot(
                 continue; // non-def dir, or missing/unreadable yaml
             }
 
-            if (doc.grammars?.some(grammar => grammar.id && DISABLED_GRAMMARS.has(grammar.id))) {
+            if (doc.grammars?.some(grammar => grammar.id && grammar.id in DISABLED_GRAMMARS)) {
                 continue;
             }
 
