@@ -13,7 +13,6 @@ import {
     existsSync,
     mkdirSync,
     readFileSync,
-    readdirSync,
     rmSync,
     statSync,
     writeFileSync,
@@ -21,7 +20,7 @@ import {
 import { join, relative } from 'node:path';
 
 import type { GrammarIndexEntry } from './arborium-yaml.js';
-import { LICENSE_FILE_RE } from './fetch-license.js';
+import { detectLicenses, findNoticeFiles } from './grammar-clone.js';
 import { QUERY_TYPES, type QueryType } from './flatten.js';
 import { Logger, paths } from './util.js';
 
@@ -48,10 +47,17 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
         );
     }
 
-    const licenseFiles = readdirSync(grammarDir).filter((n) => LICENSE_FILE_RE.test(n)).sort();
-    if (licenseFiles.length === 0) {
+    const detectedLicenses = await detectLicenses(log, grammarDir);
+    const noticeFiles = findNoticeFiles(grammarDir);
+    const attributionFiles = [
+        ...new Set([
+            ...detectedLicenses.map((l) => l.file),
+            ...noticeFiles.map((n) => n.file),
+        ]),
+    ].sort();
+    if (attributionFiles.length === 0) {
         throw new Error(
-            `no LICENSE files in ${grammarDir}. run \`arborium-rt build-grammar ${args.group} ${args.lang}\` first to fetch the upstream attribution.`,
+            `no LICENSE/NOTICE files in ${grammarDir}. run \`arborium-rt build-grammar ${args.group} ${args.lang}\` first to fetch the upstream attribution.`,
         );
     }
 
@@ -67,7 +73,7 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
     mkdirSync(outDir, { recursive: true });
 
     copyFileSync(wasmSrc, join(outDir, wasmName));
-    for (const fname of licenseFiles) {
+    for (const fname of attributionFiles) {
         copyFileSync(join(grammarDir, fname), join(outDir, fname));
     }
     for (const [qtype, content] of Object.entries(queries)) {
@@ -77,7 +83,7 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
     log.step(`wrote grammars/${args.lang} to ${relative(p.repoRoot, outDir)}`);
     const files = [
         wasmName,
-        ...licenseFiles,
+        ...attributionFiles,
         ...QUERY_TYPES.filter((q) => queries[q] !== undefined).map((q) => `${q}.scm`),
     ];
     for (const name of files) {

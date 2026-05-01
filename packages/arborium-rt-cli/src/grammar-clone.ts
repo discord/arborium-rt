@@ -13,10 +13,11 @@ import { Logger, paths, run, runCapture } from "./util.js";
 /** Reject any askalono detection below this score as "not actually known". */
 export const MIN_SCORE = 0.8;
 
-/** Filenames we recognize as upstream attribution (license OR notice). */
-export const LICENSE_FILE_RE = /^(LICENSE|license|COPYING|NOTICE)/;
-
-/** Subset of LICENSE_FILE_RE that's specifically a NOTICE (Apache §4(d)). */
+/**
+ * NOTICE-file filename pattern (Apache §4(d)). License-shaped filenames
+ * are identified by askalono's own matcher; NOTICE files aren't licenses
+ * and aren't in askalono's database, so we still recognize them by name.
+ */
 export const NOTICE_FILE_RE = /^NOTICE($|\.)/i;
 
 /**

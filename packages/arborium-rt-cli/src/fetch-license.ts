@@ -16,7 +16,7 @@
 // LICENSE-ish file, no clone happens. To re-fetch after bumping a
 // pinned commit, delete the affected files in `target/grammars/<lang>/`.
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -24,7 +24,6 @@ import {
   resolveCommit,
 } from "./arborium-yaml.js";
 import {
-  LICENSE_FILE_RE,
   cloneDirFor,
   detectLicenses,
   ensureClone,
@@ -32,8 +31,6 @@ import {
   isLocalGrammar,
 } from "./grammar-clone.js";
 import { Logger, paths } from "./util.js";
-
-export { LICENSE_FILE_RE };
 
 export interface FetchLicenseArgs {
   /** Grammar id (matches the index key). Used as the clone-cache key. */
@@ -52,12 +49,13 @@ export interface FetchLicenseArgs {
  * contains any LICENSE-ish file, returns immediately without cloning.
  */
 export async function fetchLicense(args: FetchLicenseArgs): Promise<void> {
-  if (
-    existsSync(args.outDir) &&
-    readdirSync(args.outDir).some((n) => LICENSE_FILE_RE.test(n))
-  ) {
-    args.log.info(`license already cached at ${args.outDir}`);
-    return;
+  if (existsSync(args.outDir)) {
+    const cachedLicenses = await detectLicenses(args.log, args.outDir);
+    const cachedNotices = findNoticeFiles(args.outDir);
+    if (cachedLicenses.length > 0 || cachedNotices.length > 0) {
+      args.log.info(`license already cached at ${args.outDir}`);
+      return;
+    }
   }
 
   const sourceDir = await sourceDirFor(args);
