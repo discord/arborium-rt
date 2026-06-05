@@ -87,7 +87,11 @@ pnpm --filter @discord/arborium-rt publish
   `bootstrap` (see "Submodules + patches"). `build-grammar` invokes that
   binary, never any system-installed `tree-sitter`, because only the
   patched build understands `TREE_SITTER_SPARSE_ONLY`.
-- **Node ≥20, pnpm ≥9**.
+- **Node ≥22, pnpm ≥9**. emsdk 5.x's generated host glue
+  (`web-tree-sitter.mjs`) targets a newer Node than 20; under Node 20 its
+  WebAssembly GOT symbol resolution returns `undefined` for a required
+  symbol and the glue crashes (`Cannot read properties of undefined (reading
+  'value')`) when a grammar is loaded. CI runs Node 24.
 - **askalono CLI** (`askalono` ≥ 0.5). Used by `arborium-rt notices` to
   identify upstream license files via `askalono crawl`. The CLI ships
   with its license-detection cache embedded, so no extra setup is
