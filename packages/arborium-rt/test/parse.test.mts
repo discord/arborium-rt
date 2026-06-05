@@ -1,0 +1,98 @@
+// End-to-end integration test for @discord/arborium-rt.
+//
+// Mirrors scripts/harness.mjs (repo-root), but drives the typed API rather
+// than the raw ABI. Imports from `../dist/` so `loadArboriumRuntime()` can
+// find its bundled host + runtime siblings under `dist/host/` and
+// `dist/runtime/`. The `pretest` script builds + stages those assets.
+
+import { readFile } from "node:fs/promises";
+
+import { describe, expect, it } from "vitest";
+
+import { GRAMMARS, loadArboriumRuntime } from "../dist/index.js";
+import { JSON_GRAMMAR_WASM, JSON_HIGHLIGHTS_SCM } from "./artifacts.mjs";
+
+describe("loadArboriumRuntime + Grammar + Session", () => {
+	it("parses JSON and emits number spans for literal digits", async () => {
+		const [grammarWasm, highlights] = await Promise.all([
+			readFile(JSON_GRAMMAR_WASM),
+			readFile(JSON_HIGHLIGHTS_SCM, "utf8"),
+		]);
+
+		const runtime = await loadArboriumRuntime();
+		const grammar = await runtime.loadGrammar({
+			languageId: "json",
+			wasm: grammarWasm,
+			highlights,
+		});
+		const session = grammar.createSession();
+		try {
+			session.setText("[1, 2, 3]");
+			const result = session.parse();
+			expect(result.injections).toEqual([]);
+			// The digit characters sit at UTF-16 positions 1, 4, 7 in "[1, 2, 3]".
+			expect(result.spans).toHaveLength(3);
+			expect(result.spans.map((s) => [s.start, s.end, s.capture])).toEqual([
+				[1, 2, "number"],
+				[4, 5, "number"],
+				[7, 8, "number"],
+			]);
+		} finally {
+			session.free();
+			grammar.unregister();
+		}
+	});
+
+	it("consumes a bundled grammar end-to-end", async () => {
+		// Mirrors how a consumer uses the bundled metadata:
+		//   import { GRAMMARS } from '@discord/arborium-rt';
+		//   const grammar = await runtime.loadGrammar(GRAMMARS.json);
+		const runtime = await loadArboriumRuntime();
+		// Entry is structurally a LoadGrammarOptions — URL-typed queries are
+		// fetched by loadGrammar itself.
+		const grammar = await runtime.loadGrammar(GRAMMARS.json);
+		const session = grammar.createSession();
+		try {
+			session.setText('{"x": 42}');
+			const result = session.parse();
+			const captures = result.spans.map((s) => s.capture).sort();
+			// { "x": 42 } should produce: @string.special.key, @string (for "x"),
+			// @number (for 42). Order within the spans list follows tree-sitter
+			// match order, so compare sets.
+			expect(captures).toEqual(["number", "string", "string.special.key"]);
+		} finally {
+			session.free();
+			grammar.unregister();
+		}
+	});
+
+	it("supports multiple sessions against the same grammar", async () => {
+		const [grammarWasm, highlights] = await Promise.all([
+			readFile(JSON_GRAMMAR_WASM),
+			readFile(JSON_HIGHLIGHTS_SCM, "utf8"),
+		]);
+
+		const runtime = await loadArboriumRuntime();
+		const grammar = await runtime.loadGrammar({
+			languageId: "json",
+			wasm: grammarWasm,
+			highlights,
+		});
+
+		const s1 = grammar.createSession();
+		const s2 = grammar.createSession();
+		expect(s1.id).not.toBe(s2.id);
+
+		s1.setText("true");
+		s2.setText('"hi"');
+		const r1 = s1.parse();
+		const r2 = s2.parse();
+
+		expect(r1.spans.map((s) => s.capture)).toEqual(["constant.builtin"]);
+		expect(r2.spans.map((s) => s.capture)).toEqual(["string"]);
+
+		s1.free();
+		s2.free();
+		grammar.unregister();
+	});
+});

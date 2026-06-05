@@ -237,7 +237,7 @@ cd arborium-rt
 ./scripts/arborium-rt bootstrap     # apply patches + render Cargo manifests
 cargo build --release               # arborium_emscripten_runtime.wasm
 ./scripts/arborium-rt build-host    # web-tree-sitter.{wasm,mjs}
-./scripts/arborium-rt build group-acorn json
+./scripts/arborium-rt build-all     # build all grammars
 pnpm install && pnpm -r build && pnpm -r test
 ```
 
