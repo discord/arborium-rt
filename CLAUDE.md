@@ -74,8 +74,12 @@ pnpm --filter @discord/arborium-rt publish
 ### Prereqs the tooling expects on PATH
 
 - **emsdk 4.0.15 or 5.x** (`emcc`, `em++`, `llvm-objdump`). Source `emsdk_env.sh`.
-  Emscripten 5.x is fully supported; the MAIN_MODULE build uses `-O2` to work
-  around a known `-O3` bug where `__stack_pointer` is incorrectly eliminated.
+  CI pins **5.0.6** (see `.github/workflows/build.yml`). Emscripten 5.x is fully
+  supported; the MAIN_MODULE build uses `-O2` to work around a known `-O3` bug
+  where `__stack_pointer` is incorrectly eliminated. Grammar SIDE_MODULEs link
+  their external-scanner entry points into `EXPORTED_FUNCTIONS` explicitly so
+  the wasm loads under emsdk 4.0.x too, which (unlike 5.x) doesn't auto-export
+  the address-taken scanner functions referenced through `GOT.func`.
 - **Nightly Rust** with `rust-src` (for `-Zbuild-std`). A system/nix nightly
   works — rustup isn't required.
 - **tree-sitter CLI** — built locally from the patched submodule by

@@ -57,11 +57,11 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Install emsdk 4.0.15
+      - name: Install emsdk 5.0.6
         run: |
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
-          "$HOME/emsdk/emsdk" install 4.0.15
-          "$HOME/emsdk/emsdk" activate 4.0.15
+          "$HOME/emsdk/emsdk" install 5.0.6
+          "$HOME/emsdk/emsdk" activate 5.0.6
           source "$HOME/emsdk/emsdk_env.sh"
           echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
           echo "EMSDK_NODE=$EMSDK_NODE" >> "$GITHUB_ENV"
@@ -139,11 +139,11 @@ jobs:
           node-version: 20
           cache: pnpm
 
-      - name: Install emsdk 4.0.15
+      - name: Install emsdk 5.0.6
         run: |
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
-          "$HOME/emsdk/emsdk" install 4.0.15
-          "$HOME/emsdk/emsdk" activate 4.0.15
+          "$HOME/emsdk/emsdk" install 5.0.6
+          "$HOME/emsdk/emsdk" activate 5.0.6
           source "$HOME/emsdk/emsdk_env.sh"
           echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
           echo "EMSDK_NODE=$EMSDK_NODE" >> "$GITHUB_ENV"

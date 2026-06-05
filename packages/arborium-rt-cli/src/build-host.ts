@@ -108,7 +108,7 @@ export async function buildHost(): Promise<void> {
 
 	if (!(await hasCommand("emcc"))) {
 		throw new Error(
-			"emcc not found on PATH. install emsdk 4.0.15 and source emsdk_env.sh.",
+			"emcc not found on PATH. install emsdk (4.0.15 or 5.x; CI pins 5.0.6) and source emsdk_env.sh.",
 		);
 	}
 
