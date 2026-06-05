@@ -179,15 +179,15 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
 	// entry points must be exported too. The generated parser table stores
 	// them as function pointers, which emscripten emits as `GOT.func`
 	// imports that the MAIN_MODULE host's dynamic linker resolves against
-	// this side module's *exports* at load time. emsdk 5.x auto-exports such
-	// address-taken functions, but emsdk 4.0.x does not under SIDE_MODULE=2 —
-	// the GOT entries are left unresolved and the host throws `bad export
-	// type for 'tree_sitter_<sym>_external_scanner_create': undefined` when
-	// the grammar is loaded. List them explicitly so the wasm loads on every
-	// supported emsdk regardless of that heuristic. (Upstream tree-sitter
-	// sidesteps this by building grammars as wasm32-unknown-wasi `-shared`
-	// objects, where intra-module pointers resolve locally and no exports
-	// are needed.)
+	// this side module's *exports* at load time. Name them explicitly rather
+	// than rely on emcc auto-exporting address-taken functions: that heuristic
+	// is version-dependent (emsdk 4.0.x omitted these entirely under
+	// SIDE_MODULE=2, so the host threw `bad export type for
+	// 'tree_sitter_<sym>_external_scanner_create': undefined` on load) and an
+	// explicit `--export` is the contract-correct way to state which symbols
+	// the host must resolve. (Upstream tree-sitter sidesteps the issue by
+	// building grammars as wasm32-unknown-wasi `-shared` objects, where
+	// intra-module pointers resolve locally and no exports are needed.)
 	const exportedFns = [`_tree_sitter_${cSymbol}`];
 	if (scannerC || scannerCxx) {
 		for (const op of [
