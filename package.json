@@ -1,14 +1,18 @@
 {
-  "name": "arborium-rt-workspace",
-  "private": true,
-  "engines": {
-    "node": ">=20",
-    "pnpm": ">=9"
-  },
-  "scripts": {
-    "build": "pnpm -r build",
-    "test": "pnpm -r test",
-    "cli": "./scripts/arborium-rt"
-  },
-  "packageManager": "pnpm@9.12.2"
+	"name": "arborium-rt-workspace",
+	"private": true,
+	"engines": {
+		"node": ">=20",
+		"pnpm": ">=9"
+	},
+	"scripts": {
+		"build": "pnpm -r build",
+		"test": "pnpm -r test",
+		"cli": "./scripts/arborium-rt",
+		"check": "pnpm biome check --write ."
+	},
+	"packageManager": "pnpm@9.12.2",
+	"devDependencies": {
+		"@biomejs/biome": "2.4.16"
+	}
 }

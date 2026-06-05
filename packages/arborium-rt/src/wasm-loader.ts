@@ -14,8 +14,8 @@
  * browsers.
  */
 export async function readLocalWasm(url: URL): Promise<Uint8Array | null> {
-    if (url.protocol !== 'file:') return null;
-    const { readFile } = await import('node:fs/promises');
-    const buf = await readFile(url);
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+	if (url.protocol !== "file:") return null;
+	const { readFile } = await import("node:fs/promises");
+	const buf = await readFile(url);
+	return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }

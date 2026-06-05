@@ -7,5 +7,5 @@
 // to read off the filesystem and everything falls through to `fetch()`.
 
 export async function readLocalWasm(_url: URL): Promise<Uint8Array | null> {
-    return null;
+	return null;
 }

@@ -30,22 +30,22 @@ import { join } from "node:path";
 import spdxSatisfies from "spdx-satisfies";
 
 import {
-  buildGrammarIndex,
-  type GrammarIndexEntry,
-  resolveCommit,
+	buildGrammarIndex,
+	type GrammarIndexEntry,
+	resolveCommit,
 } from "./arborium-yaml.js";
 import {
-  ARBORIUM_LICENSE_EXPR,
-  type DetectedLicense,
-  type NoticeFile,
-  MIN_SCORE,
-  cloneDirFor,
-  detectLicenses,
-  ensureClone,
-  findNoticeFiles,
-  isLocalGrammar,
+	ARBORIUM_LICENSE_EXPR,
+	cloneDirFor,
+	type DetectedLicense,
+	detectLicenses,
+	ensureClone,
+	findNoticeFiles,
+	isLocalGrammar,
+	MIN_SCORE,
+	type NoticeFile,
 } from "./grammar-clone.js";
-import { Logger, hasCommand, paths, runPool } from "./util.js";
+import { hasCommand, Logger, paths, runPool } from "./util.js";
 
 /** Bounded clone parallelism. ~100 grammars × network-dominant; 8 is plenty. */
 const DEFAULT_CLONE_CONCURRENCY = 8;
@@ -57,132 +57,134 @@ const DEFAULT_CLONE_CONCURRENCY = 8;
  * still has to match this. Each entry is a deliberate human review.
  */
 const LICENSE_OVERRIDES: Record<string, string> = {
-  // Manifest claims Unlicense; upstream COPYING.txt is the verbatim
-  // CC0-1.0 dedication.
-  clojure: "CC0-1.0",
-  // Manifest claims MIT; upstream LICENSE is the verbatim BSD-3-Clause text.
-  jq: "BSD-3-Clause",
-  // Manifest claims MIT; upstream LICENSE is the verbatim BSD-2-Clause text.
-  postscript: "BSD-2-Clause",
+	// Manifest claims Unlicense; upstream COPYING.txt is the verbatim
+	// CC0-1.0 dedication.
+	clojure: "CC0-1.0",
+	// Manifest claims MIT; upstream LICENSE is the verbatim BSD-3-Clause text.
+	jq: "BSD-3-Clause",
+	// Manifest claims MIT; upstream LICENSE is the verbatim BSD-2-Clause text.
+	postscript: "BSD-2-Clause",
 };
 
 interface NoticeEntry {
-  id: string;
-  name: string | undefined;
-  repo: string | undefined;
-  commit: string | undefined;
-  licenses: DetectedLicense[];
-  notices: NoticeFile[];
+	id: string;
+	name: string | undefined;
+	repo: string | undefined;
+	commit: string | undefined;
+	licenses: DetectedLicense[];
+	notices: NoticeFile[];
 }
 
 export async function writeThirdPartyNotices(): Promise<void> {
-  const p = paths();
-  const log = new Logger("notices");
+	const p = paths();
+	const log = new Logger("notices");
 
-  if (!(await hasCommand("askalono"))) {
-    throw new Error(
-      "askalono not on PATH — install via `cargo install --locked askalono-cli` or download from https://github.com/jpeddicord/askalono/releases (see CLAUDE.md prereqs)",
-    );
-  }
+	if (!(await hasCommand("askalono"))) {
+		throw new Error(
+			"askalono not on PATH — install via `cargo install --locked askalono-cli` or download from https://github.com/jpeddicord/askalono/releases (see CLAUDE.md prereqs)",
+		);
+	}
 
-  const index = buildGrammarIndex(p.langsRoots);
-  const targets = [...index.entries()].sort(([a], [b]) => a.localeCompare(b));
-  if (targets.length === 0) {
-    log.warn("grammar index is empty; skipping notices generation");
-    return;
-  }
+	const index = buildGrammarIndex(p.langsRoots);
+	const targets = [...index.entries()].sort(([a], [b]) => a.localeCompare(b));
+	if (targets.length === 0) {
+		log.warn("grammar index is empty; skipping notices generation");
+		return;
+	}
 
-  const entries: NoticeEntry[] = [];
-  const failed: Array<{ id: string; reason: string }> = [];
+	const entries: NoticeEntry[] = [];
+	const failed: Array<{ id: string; reason: string }> = [];
 
-  const concurrency = Math.max(
-    1,
-    Math.min(DEFAULT_CLONE_CONCURRENCY, availableParallelism()),
-  );
+	const concurrency = Math.max(
+		1,
+		Math.min(DEFAULT_CLONE_CONCURRENCY, availableParallelism()),
+	);
 
-  await runPool(targets, concurrency, async ([id, entry]) => {
-    try {
-      entries.push(await processGrammar(id, entry));
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      failed.push({ id, reason });
-    }
-  });
+	await runPool(targets, concurrency, async ([id, entry]) => {
+		try {
+			entries.push(await processGrammar(id, entry));
+		} catch (e) {
+			const reason = e instanceof Error ? e.message : String(e);
+			failed.push({ id, reason });
+		}
+	});
 
-  if (failed.length > 0) {
-    for (const { id, reason } of failed) {
-      log.warn(`${id}: ${reason.split("\n")[0]}`);
-    }
-    throw new Error(
-      `notices generation failed for ${failed.length}/${targets.length} grammar(s); first failure: ${failed[0]!.id}: ${failed[0]!.reason.split("\n")[0]}`,
-    );
-  }
+	if (failed.length > 0) {
+		for (const { id, reason } of failed) {
+			log.warn(`${id}: ${reason.split("\n")[0]}`);
+		}
+		throw new Error(
+			`notices generation failed for ${failed.length}/${targets.length} grammar(s); first failure: ${failed[0]!.id}: ${failed[0]!.reason.split("\n")[0]}`,
+		);
+	}
 
-  entries.sort((a, b) => a.id.localeCompare(b.id));
-  const text = renderBundle(entries);
+	entries.sort((a, b) => a.id.localeCompare(b.id));
+	const text = renderBundle(entries);
 
-  mkdirSync(join(p.runtimePackageDir, "dist"), { recursive: true });
-  writeFileSync(join(p.runtimePackageDir, "dist", "THIRD_PARTY_NOTICES"), text);
-  writeFileSync(join(p.repoRoot, "THIRD_PARTY_NOTICES"), text);
+	mkdirSync(join(p.runtimePackageDir, "dist"), { recursive: true });
+	writeFileSync(join(p.runtimePackageDir, "dist", "THIRD_PARTY_NOTICES"), text);
+	writeFileSync(join(p.repoRoot, "THIRD_PARTY_NOTICES"), text);
 
-  log.step(
-    `wrote THIRD_PARTY_NOTICES (${entries.length} grammars, ${entries.reduce((n, e) => n + e.licenses.length, 0)} license file(s), ${entries.reduce((n, e) => n + e.notices.length, 0)} notice file(s))`,
-  );
+	log.step(
+		`wrote THIRD_PARTY_NOTICES (${entries.length} grammars, ${entries.reduce((n, e) => n + e.licenses.length, 0)} license file(s), ${entries.reduce((n, e) => n + e.notices.length, 0)} notice file(s))`,
+	);
 }
 
 async function processGrammar(
-  id: string,
-  entry: GrammarIndexEntry,
+	id: string,
+	entry: GrammarIndexEntry,
 ): Promise<NoticeEntry> {
-  const log = new Logger(id);
+	const log = new Logger(id);
 
-  if (isLocalGrammar(entry)) {
-    const arboriumRoot = paths().submoduleRoot;
-    const detections = await detectLicenses(log, arboriumRoot);
-    if (detections.length === 0) {
-      throw new Error(
-        `askalono found no license files at the arborium submodule root (${arboriumRoot})`,
-      );
-    }
-    reconcile(id, detections, ARBORIUM_LICENSE_EXPR, entry.license);
-    return {
-      id,
-      name: entry.grammar.name,
-      repo: "(local — vendored in arborium; attributed under arborium's license)",
-      commit: undefined,
-      licenses: detections,
-      notices: [],
-    };
-  }
+	if (isLocalGrammar(entry)) {
+		const arboriumRoot = paths().submoduleRoot;
+		const detections = await detectLicenses(log, arboriumRoot);
+		if (detections.length === 0) {
+			throw new Error(
+				`askalono found no license files at the arborium submodule root (${arboriumRoot})`,
+			);
+		}
+		reconcile(id, detections, ARBORIUM_LICENSE_EXPR, entry.license);
+		return {
+			id,
+			name: entry.grammar.name,
+			repo: "(local — vendored in arborium; attributed under arborium's license)",
+			commit: undefined,
+			licenses: detections,
+			notices: [],
+		};
+	}
 
-  if (!entry.repo) {
-    throw new Error(`grammar ${id} has no upstream repo URL`);
-  }
-  const commit = resolveCommit(id, entry);
-  const cloneDir = cloneDirFor(id);
-  await ensureClone(log, cloneDir, entry.repo, commit);
+	if (!entry.repo) {
+		throw new Error(`grammar ${id} has no upstream repo URL`);
+	}
+	const commit = resolveCommit(id, entry);
+	const cloneDir = cloneDirFor(id);
+	await ensureClone(log, cloneDir, entry.repo, commit);
 
-  const detections = await detectLicenses(log, cloneDir);
-  if (detections.length === 0) {
-    throw new Error(`askalono found no license files in ${cloneDir}`);
-  }
+	const detections = await detectLicenses(log, cloneDir);
+	if (detections.length === 0) {
+		throw new Error(`askalono found no license files in ${cloneDir}`);
+	}
 
-  const expected = LICENSE_OVERRIDES[id] ?? entry.license;
-  if (!expected) {
-    throw new Error(`grammar ${id} has no manifest license to reconcile against`);
-  }
-  reconcile(id, detections, expected, entry.license);
+	const expected = LICENSE_OVERRIDES[id] ?? entry.license;
+	if (!expected) {
+		throw new Error(
+			`grammar ${id} has no manifest license to reconcile against`,
+		);
+	}
+	reconcile(id, detections, expected, entry.license);
 
-  const notices = findNoticeFiles(cloneDir);
+	const notices = findNoticeFiles(cloneDir);
 
-  return {
-    id,
-    name: entry.grammar.name,
-    repo: entry.repo,
-    commit,
-    licenses: detections,
-    notices,
-  };
+	return {
+		id,
+		name: entry.grammar.name,
+		repo: entry.repo,
+		commit,
+		licenses: detections,
+		notices,
+	};
 }
 
 /**
@@ -191,78 +193,82 @@ async function processGrammar(
  * `spdx-satisfies` doesn't accept OR/AND on the right-hand side.
  */
 function reconcile(
-  id: string,
-  detections: readonly DetectedLicense[],
-  expected: string,
-  manifestLicense: string | undefined,
+	id: string,
+	detections: readonly DetectedLicense[],
+	expected: string,
+	manifestLicense: string | undefined,
 ): void {
-  const branches = expected.split(/\s+OR\s+/i).map((s) => s.trim()).filter(Boolean);
-  for (const det of detections) {
-    if (det.score < MIN_SCORE) {
-      throw new Error(
-        `askalono confidence ${det.score.toFixed(3)} below threshold ${MIN_SCORE} for ${id}/${det.file} (detected ${det.spdx}); manual review required`,
-      );
-    }
-    const ok = branches.some((b) => spdxSatisfies(det.spdx, [b]));
-    if (!ok) {
-      throw new Error(
-        `license mismatch for ${id}: manifest says ${manifestLicense ?? "(none)"}, expected ${expected}, askalono detected ${det.spdx} at confidence ${det.score.toFixed(3)} in ${det.file}`,
-      );
-    }
-  }
+	const branches = expected
+		.split(/\s+OR\s+/i)
+		.map((s) => s.trim())
+		.filter(Boolean);
+	for (const det of detections) {
+		if (det.score < MIN_SCORE) {
+			throw new Error(
+				`askalono confidence ${det.score.toFixed(3)} below threshold ${MIN_SCORE} for ${id}/${det.file} (detected ${det.spdx}); manual review required`,
+			);
+		}
+		const ok = branches.some((b) => spdxSatisfies(det.spdx, [b]));
+		if (!ok) {
+			throw new Error(
+				`license mismatch for ${id}: manifest says ${manifestLicense ?? "(none)"}, expected ${expected}, askalono detected ${det.spdx} at confidence ${det.score.toFixed(3)} in ${det.file}`,
+			);
+		}
+	}
 }
 
 const RULE = "=".repeat(80);
 const SUBRULE = "-".repeat(80);
-const NOTICE_BANNER = "--------------------------------- NOTICE ---------------------------------------";
+const NOTICE_BANNER =
+	"--------------------------------- NOTICE ---------------------------------------";
 
 function renderBundle(entries: readonly NoticeEntry[]): string {
-  const head = [
-    "THIRD-PARTY NOTICES — @discord/arborium-rt",
-    "==========================================",
-    "",
-    "This package bundles tree-sitter grammars from upstream sources, each",
-    "licensed under its own terms shown verbatim below. Generated by",
-    "`arborium-rt notices` from each grammar's pinned commit; license",
-    "identification is performed by askalono (https://github.com/jpeddicord/askalono).",
-    "",
-  ].join("\n");
+	const head = [
+		"THIRD-PARTY NOTICES — @discord/arborium-rt",
+		"==========================================",
+		"",
+		"This package bundles tree-sitter grammars from upstream sources, each",
+		"licensed under its own terms shown verbatim below. Generated by",
+		"`arborium-rt notices` from each grammar's pinned commit; license",
+		"identification is performed by askalono (https://github.com/jpeddicord/askalono).",
+		"",
+	].join("\n");
 
-  const sections = entries.map((e, i) => renderEntry(i + 1, e));
-  return `${head}\n${sections.join("\n\n")}\n`;
+	const sections = entries.map((e, i) => renderEntry(i + 1, e));
+	return `${head}\n${sections.join("\n\n")}\n`;
 }
 
 function renderEntry(idx: number, e: NoticeEntry): string {
-  const numbered = String(idx).padStart(3, "0");
-  const header = [
-    RULE,
-    `[${numbered}] tree-sitter-${e.id} (id: ${e.id}${e.name ? `, name: ${e.name}` : ""})`,
-    `Source:  ${e.repo ?? "(no repo URL)"}`,
-    `Commit:  ${e.commit ?? "(unpinned, default branch)"}`,
-  ].join("\n");
+	const numbered = String(idx).padStart(3, "0");
+	const header = [
+		RULE,
+		`[${numbered}] tree-sitter-${e.id} (id: ${e.id}${e.name ? `, name: ${e.name}` : ""})`,
+		`Source:  ${e.repo ?? "(no repo URL)"}`,
+		`Commit:  ${e.commit ?? "(unpinned, default branch)"}`,
+	].join("\n");
 
-  const blocks: string[] = [];
-  for (const lic of e.licenses) {
-    blocks.push(
-      [
-        `License: ${lic.spdx}  (askalono confidence: ${lic.score.toFixed(3)})`,
-        `File:    ${lic.file}`,
-        SUBRULE,
-        "",
-        lic.text.replace(/\s+$/g, ""),
-      ].join("\n"),
-    );
-  }
-  for (const nb of e.notices) {
-    blocks.push(
-      [
-        NOTICE_BANNER,
-        `File:    ${nb.file}`,
-        "",
-        nb.text.replace(/\s+$/g, ""),
-      ].join("\n"),
-    );
-  }
+	const blocks: string[] = [];
+	for (const lic of e.licenses) {
+		blocks.push(
+			[
+				`License: ${lic.spdx}  (askalono confidence: ${lic.score.toFixed(3)})`,
+				`File:    ${lic.file}`,
+				SUBRULE,
+				"",
+				lic.text.replace(/\s+$/g, ""),
+			].join("\n"),
+		);
+	}
+	for (const nb of e.notices) {
+		blocks.push(
+			[
+				NOTICE_BANNER,
+				`File:    ${nb.file}`,
+				"",
+				nb.text.replace(/\s+$/g, ""),
+			].join("\n"),
+		);
+	}
 
-  return [header, ...blocks].join("\n\n");
+	return [header, ...blocks].join("\n\n");
 }

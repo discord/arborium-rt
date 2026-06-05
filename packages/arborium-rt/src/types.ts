@@ -5,35 +5,35 @@
 
 /** A highlighted span with UTF-16 code-unit indices (suitable for JS string slice). */
 export interface Utf16Span {
-    /** UTF-16 code unit where the span starts. */
-    start: number;
-    /** UTF-16 code unit where the span ends (exclusive). */
-    end: number;
-    /** Capture name from highlights.scm (e.g. "keyword", "string", "number"). */
-    capture: string;
-    /** Pattern index from the query; higher = later rule = higher priority. */
-    pattern_index: number;
+	/** UTF-16 code unit where the span starts. */
+	start: number;
+	/** UTF-16 code unit where the span ends (exclusive). */
+	end: number;
+	/** Capture name from highlights.scm (e.g. "keyword", "string", "number"). */
+	capture: string;
+	/** Pattern index from the query; higher = later rule = higher priority. */
+	pattern_index: number;
 }
 
 /** An injection point with UTF-16 code-unit indices. */
 export interface Utf16Injection {
-    start: number;
-    end: number;
-    /** Injected language ID (e.g. "javascript" inside HTML). */
-    language: string;
-    include_children: boolean;
+	start: number;
+	end: number;
+	/** Injected language ID (e.g. "javascript" inside HTML). */
+	language: string;
+	include_children: boolean;
 }
 
 /** Full parse result in UTF-16-indexed form. */
 export interface Utf16ParseResult {
-    spans: Utf16Span[];
-    injections: Utf16Injection[];
-    /**
-     * `true` if the runtime's wall-clock query budget fired before the
-     * QueryCursor finished. `spans` then holds whatever was collected
-     * before the budget expired — partial output.
-     */
-    timed_out: boolean;
+	spans: Utf16Span[];
+	injections: Utf16Injection[];
+	/**
+	 * `true` if the runtime's wall-clock query budget fired before the
+	 * QueryCursor finished. `spans` then holds whatever was collected
+	 * before the budget expired — partial output.
+	 */
+	timed_out: boolean;
 }
 
 /**
@@ -45,36 +45,36 @@ export interface Utf16ParseResult {
  * `"string"`.
  */
 export interface ThemedSpan {
-    start: number;
-    end: number;
-    tag: string;
+	start: number;
+	end: number;
+	tag: string;
 }
 
 /** Wire shape of `arborium_rt_highlight_to_spans_utf16`'s JSON payload. */
 export interface ThemedHighlightResult {
-    spans: ThemedSpan[];
-    /**
-     * Languages referenced by injection queries but not loaded in the registry.
-     * The TypeScript wrapper uses this to auto-load missing grammars and retry.
-     */
-    missing_injections: string[];
-    /**
-     * Language names whose parse exceeded the runtime's wall-clock query
-     * budget. Empty when no parse timed out.
-     */
-    timed_out_languages: string[];
+	spans: ThemedSpan[];
+	/**
+	 * Languages referenced by injection queries but not loaded in the registry.
+	 * The TypeScript wrapper uses this to auto-load missing grammars and retry.
+	 */
+	missing_injections: string[];
+	/**
+	 * Language names whose parse exceeded the runtime's wall-clock query
+	 * budget. Empty when no parse timed out.
+	 */
+	timed_out_languages: string[];
 }
 
 /** Wire shape of `arborium_rt_highlight_to_html`'s JSON payload. */
 export interface HtmlHighlightResult {
-    html: string;
-    /**
-     * Languages referenced by injection queries but not loaded in the registry.
-     * The TypeScript wrapper uses this to auto-load missing grammars and retry.
-     */
-    missing_injections: string[];
-    /** See [`ThemedHighlightResult.timed_out_languages`]. */
-    timed_out_languages: string[];
+	html: string;
+	/**
+	 * Languages referenced by injection queries but not loaded in the registry.
+	 * The TypeScript wrapper uses this to auto-load missing grammars and retry.
+	 */
+	missing_injections: string[];
+	/** See [`ThemedHighlightResult.timed_out_languages`]. */
+	timed_out_languages: string[];
 }
 
 /**
@@ -91,10 +91,10 @@ export interface HtmlHighlightResult {
  *   class names prefixed so they don't collide with page CSS.
  */
 export type HtmlFormat =
-    | { kind: 'custom-elements' }
-    | { kind: 'custom-elements-with-prefix'; prefix: string }
-    | { kind: 'class-names' }
-    | { kind: 'class-names-with-prefix'; prefix: string };
+	| { kind: "custom-elements" }
+	| { kind: "custom-elements-with-prefix"; prefix: string }
+	| { kind: "class-names" }
+	| { kind: "class-names-with-prefix"; prefix: string };
 
 /**
  * An edit to apply to the text for incremental parsing.
@@ -104,13 +104,13 @@ export type HtmlFormat =
  * can start typing against it ahead of the ABI bump.
  */
 export interface Edit {
-    start_byte: number;
-    old_end_byte: number;
-    new_end_byte: number;
-    start_row: number;
-    start_col: number;
-    old_end_row: number;
-    old_end_col: number;
-    new_end_row: number;
-    new_end_col: number;
+	start_byte: number;
+	old_end_byte: number;
+	new_end_byte: number;
+	start_row: number;
+	start_col: number;
+	old_end_row: number;
+	old_end_col: number;
+	new_end_row: number;
+	new_end_col: number;
 }

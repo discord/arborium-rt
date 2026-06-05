@@ -1,18 +1,18 @@
 // Typed reader for the arborium submodule's `langs/*/*/def/arborium.yaml`.
 
-import { type Dirent, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { type Dirent, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
-import spdxSatisfies from 'spdx-satisfies';
-import { parse as parseYaml } from 'yaml';
+import spdxSatisfies from "spdx-satisfies";
+import { parse as parseYaml } from "yaml";
 
 const ALLOWED_LICENSES = [
-    'CC0-1.0',
-    'MIT',
-    'Apache-2.0',
-    'Unlicense',
-    'ISC',
-    'Apache-2.0 WITH LLVM-exception',
+	"CC0-1.0",
+	"MIT",
+	"Apache-2.0",
+	"Unlicense",
+	"ISC",
+	"Apache-2.0 WITH LLVM-exception",
 ];
 
 /**
@@ -22,12 +22,13 @@ const ALLOWED_LICENSES = [
  * maintain a parallel skip list.
  */
 export const DISABLED_GRAMMARS: Record<string, string> = {
-    cobol: 'has performance issues',
-    nginx: 'GPL licensed',
-    uiua: 'MPL licensed',
-    prolog: 'manifest claims MIT but upstream LICENSE is AGPL-3.0; copyleft contamination, cannot ship',
-    vb: 'upstream repo ships no LICENSE file; cannot attribute',
-}
+	cobol: "has performance issues",
+	nginx: "GPL licensed",
+	uiua: "MPL licensed",
+	prolog:
+		"manifest claims MIT but upstream LICENSE is AGPL-3.0; copyleft contamination, cannot ship",
+	vb: "upstream repo ships no LICENSE file; cannot attribute",
+};
 
 /**
  * Per-grammar commit overrides for upstreams whose manifest-pinned SHA is
@@ -37,51 +38,53 @@ export const DISABLED_GRAMMARS: Record<string, string> = {
  * current default-branch HEAD. Refresh when upstream rotates again.
  */
 export const COMMIT_OVERRIDES: Record<string, string> = {
-    rust: 'a2d578348a195fe9fc97bd14a9fc84f314a0c2fe',
-    styx: '0655eb2b0f9e1ddbd0e27a0b9063f1317c990f70',
-    vim: '3092fcd99eb87bbd0fc434aa03650ba58bd5b43b',
-}
+	rust: "a2d578348a195fe9fc97bd14a9fc84f314a0c2fe",
+	styx: "0655eb2b0f9e1ddbd0e27a0b9063f1317c990f70",
+	vim: "3092fcd99eb87bbd0fc434aa03650ba58bd5b43b",
+};
 
 /** Effective commit for a grammar, after applying COMMIT_OVERRIDES. */
-export function resolveCommit(id: string, entry: GrammarIndexEntry): string | undefined {
-    return COMMIT_OVERRIDES[id] ?? entry.commit;
+export function resolveCommit(
+	id: string,
+	entry: GrammarIndexEntry,
+): string | undefined {
+	return COMMIT_OVERRIDES[id] ?? entry.commit;
 }
 
-
 export interface ArboriumYaml {
-    grammars?: ArboriumGrammar[];
-    license?: string;
-    /** Upstream source repo URL (typically `https://github.com/<owner>/<name>`). */
-    repo?: string;
-    /** Pinned upstream commit SHA. Empty string means "use the default branch". */
-    commit?: string;
+	grammars?: ArboriumGrammar[];
+	license?: string;
+	/** Upstream source repo URL (typically `https://github.com/<owner>/<name>`). */
+	repo?: string;
+	/** Pinned upstream commit SHA. Empty string means "use the default branch". */
+	commit?: string;
 }
 
 export interface ArboriumGrammar {
-    id?: string;
-    name?: string;
-    aliases?: string[];
-    /**
-     * Override for the grammar's tree-sitter C symbol. The `tree_sitter_<X>`
-     * function's `<X>` is this value, falling back to `id`. E.g., Rust's id
-     * is `"rust"` but its c_symbol is `"rust_orchard"` (grammar-orchard fork).
-     */
-    c_symbol?: string;
-    dependencies?: Array<{ npm?: string; crate?: string }>;
-    queries?: {
-        highlights?: QueryConfig;
-        injections?: QueryConfig;
-        locals?: QueryConfig;
-    };
+	id?: string;
+	name?: string;
+	aliases?: string[];
+	/**
+	 * Override for the grammar's tree-sitter C symbol. The `tree_sitter_<X>`
+	 * function's `<X>` is this value, falling back to `id`. E.g., Rust's id
+	 * is `"rust"` but its c_symbol is `"rust_orchard"` (grammar-orchard fork).
+	 */
+	c_symbol?: string;
+	dependencies?: Array<{ npm?: string; crate?: string }>;
+	queries?: {
+		highlights?: QueryConfig;
+		injections?: QueryConfig;
+		locals?: QueryConfig;
+	};
 }
 
 export interface QueryConfig {
-    prepend?: Array<{ crate?: string }>;
+	prepend?: Array<{ crate?: string }>;
 }
 
 /** Parse a single `arborium.yaml` file. Throws on malformed YAML. */
 export function readArboriumYaml(path: string): ArboriumYaml {
-    return (parseYaml(readFileSync(path, 'utf8')) ?? {}) as ArboriumYaml;
+	return (parseYaml(readFileSync(path, "utf8")) ?? {}) as ArboriumYaml;
 }
 
 /**
@@ -89,25 +92,25 @@ export function readArboriumYaml(path: string): ArboriumYaml {
  * `arborium.yaml` under `<langsRoot>/<group>/<lang>/def/`.
  */
 export interface GrammarIndexEntry {
-    readonly defPath: string;
-    readonly group: string;
-    readonly grammar: ArboriumGrammar;
-    /** Upstream source repo URL from the def's `arborium.yaml`. */
-    readonly repo: string | undefined;
-    /** Pinned upstream commit; empty string is normalized to undefined. */
-    readonly commit: string | undefined;
-    /** SPDX license identifier from the def's `arborium.yaml`. */
-    readonly license: string | undefined;
+	readonly defPath: string;
+	readonly group: string;
+	readonly grammar: ArboriumGrammar;
+	/** Upstream source repo URL from the def's `arborium.yaml`. */
+	readonly repo: string | undefined;
+	/** Pinned upstream commit; empty string is normalized to undefined. */
+	readonly commit: string | undefined;
+	/** SPDX license identifier from the def's `arborium.yaml`. */
+	readonly license: string | undefined;
 }
 
 export function buildGrammarIndex(
-    roots: readonly string[],
+	roots: readonly string[],
 ): Map<string, GrammarIndexEntry> {
-    const index = new Map<string, GrammarIndexEntry>();
-    for (const root of roots) {
-        scanRoot(root, index);
-    }
-    return index;
+	const index = new Map<string, GrammarIndexEntry>();
+	for (const root of roots) {
+		scanRoot(root, index);
+	}
+	return index;
 }
 
 /**
@@ -116,49 +119,53 @@ export function buildGrammarIndex(
  * override an arborium-vendored grammar with the same id.
  */
 function scanRoot(
-    langsRoot: string,
-    index: Map<string, GrammarIndexEntry>,
+	langsRoot: string,
+	index: Map<string, GrammarIndexEntry>,
 ): void {
-    let groups: Dirent[];
-    try {
-        groups = readdirSync(langsRoot, { withFileTypes: true });
-    } catch {
-        return; // root doesn't exist (e.g. local langs not yet populated)
-    }
-    for (const group of groups) {
-        if (!group.isDirectory()) continue;
-        const groupPath = join(langsRoot, group.name);
-        for (const lang of readdirSync(groupPath, { withFileTypes: true })) {
-            if (!lang.isDirectory()) continue;
-            const defPath = join(groupPath, lang.name, 'def');
-            let doc: ArboriumYaml;
-            try {
-                doc = readArboriumYaml(join(defPath, 'arborium.yaml'));
-            } catch {
-                continue; // non-def dir, or missing/unreadable yaml
-            }
+	let groups: Dirent[];
+	try {
+		groups = readdirSync(langsRoot, { withFileTypes: true });
+	} catch {
+		return; // root doesn't exist (e.g. local langs not yet populated)
+	}
+	for (const group of groups) {
+		if (!group.isDirectory()) continue;
+		const groupPath = join(langsRoot, group.name);
+		for (const lang of readdirSync(groupPath, { withFileTypes: true })) {
+			if (!lang.isDirectory()) continue;
+			const defPath = join(groupPath, lang.name, "def");
+			let doc: ArboriumYaml;
+			try {
+				doc = readArboriumYaml(join(defPath, "arborium.yaml"));
+			} catch {
+				continue; // non-def dir, or missing/unreadable yaml
+			}
 
-            if (doc.grammars?.some(grammar => grammar.id && grammar.id in DISABLED_GRAMMARS)) {
-                continue;
-            }
+			if (
+				doc.grammars?.some(
+					(grammar) => grammar.id && grammar.id in DISABLED_GRAMMARS,
+				)
+			) {
+				continue;
+			}
 
-            if (!doc.license || !spdxSatisfies(doc.license, ALLOWED_LICENSES)) {
-                continue;
-            }
+			if (!doc.license || !spdxSatisfies(doc.license, ALLOWED_LICENSES)) {
+				continue;
+			}
 
-            const commit = doc.commit && doc.commit !== '' ? doc.commit : undefined;
-            for (const grammar of doc.grammars ?? []) {
-                if (grammar.id) {
-                    index.set(grammar.id, {
-                        defPath,
-                        group: group.name,
-                        grammar,
-                        repo: doc.repo,
-                        commit,
-                        license: doc.license,
-                    });
-                }
-            }
-        }
-    }
+			const commit = doc.commit && doc.commit !== "" ? doc.commit : undefined;
+			for (const grammar of doc.grammars ?? []) {
+				if (grammar.id) {
+					index.set(grammar.id, {
+						defPath,
+						group: group.name,
+						grammar,
+						repo: doc.repo,
+						commit,
+						license: doc.license,
+					});
+				}
+			}
+		}
+	}
 }

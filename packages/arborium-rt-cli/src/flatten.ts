@@ -8,12 +8,12 @@
 // (`xtask/templates/lib.stpl.rs`): prepends come first, this grammar's own
 // last, so own rules win on tree-sitter pattern-priority ties.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
-import type { GrammarIndexEntry } from './arborium-yaml.js';
+import type { GrammarIndexEntry } from "./arborium-yaml.js";
 
-export const QUERY_TYPES = ['highlights', 'injections', 'locals'] as const;
+export const QUERY_TYPES = ["highlights", "injections", "locals"] as const;
 export type QueryType = (typeof QUERY_TYPES)[number];
 
 /**
@@ -25,47 +25,47 @@ export type QueryType = (typeof QUERY_TYPES)[number];
  * in practice, but cheap to guard.
  */
 export function flattenQuery(
-    grammarId: string,
-    qtype: QueryType,
-    index: Map<string, GrammarIndexEntry>,
-    seen: ReadonlySet<string> = new Set(),
+	grammarId: string,
+	qtype: QueryType,
+	index: Map<string, GrammarIndexEntry>,
+	seen: ReadonlySet<string> = new Set(),
 ): string {
-    if (seen.has(grammarId)) {
-        throw new Error(
-            `cycle in query-prepend graph at ${grammarId} (visited: ${[...seen].join(', ')})`,
-        );
-    }
-    const entry = index.get(grammarId);
-    if (!entry) {
-        throw new Error(
-            `unknown grammar id ${grammarId} (not present in langs/* scan)`,
-        );
-    }
-    const nextSeen = new Set(seen).add(grammarId);
+	if (seen.has(grammarId)) {
+		throw new Error(
+			`cycle in query-prepend graph at ${grammarId} (visited: ${[...seen].join(", ")})`,
+		);
+	}
+	const entry = index.get(grammarId);
+	if (!entry) {
+		throw new Error(
+			`unknown grammar id ${grammarId} (not present in langs/* scan)`,
+		);
+	}
+	const nextSeen = new Set(seen).add(grammarId);
 
-    const prepends = entry.grammar.queries?.[qtype]?.prepend ?? [];
-    const chunks: string[] = [];
+	const prepends = entry.grammar.queries?.[qtype]?.prepend ?? [];
+	const chunks: string[] = [];
 
-    for (const prepend of prepends) {
-        if (!prepend.crate) continue;
-        const baseId = prepend.crate.replace(/^arborium-/, '');
-        if (!index.has(baseId)) {
-            throw new Error(
-                `${grammarId}: prepend "${prepend.crate}" resolves to unknown grammar "${baseId}"`,
-            );
-        }
-        const sub = flattenQuery(baseId, qtype, index, nextSeen);
-        if (sub) chunks.push(sub);
-    }
+	for (const prepend of prepends) {
+		if (!prepend.crate) continue;
+		const baseId = prepend.crate.replace(/^arborium-/, "");
+		if (!index.has(baseId)) {
+			throw new Error(
+				`${grammarId}: prepend "${prepend.crate}" resolves to unknown grammar "${baseId}"`,
+			);
+		}
+		const sub = flattenQuery(baseId, qtype, index, nextSeen);
+		if (sub) chunks.push(sub);
+	}
 
-    const ownScm = join(entry.defPath, 'queries', `${qtype}.scm`);
-    if (existsSync(ownScm)) {
-        chunks.push(readFileSync(ownScm, 'utf8'));
-    }
+	const ownScm = join(entry.defPath, "queries", `${qtype}.scm`);
+	if (existsSync(ownScm)) {
+		chunks.push(readFileSync(ownScm, "utf8"));
+	}
 
-    // Blank-line separator between chunks keeps the boundary readable in case
-    // of debug; matches the Python flattener's behavior.
-    return chunks.join('\n');
+	// Blank-line separator between chunks keeps the boundary readable in case
+	// of debug; matches the Python flattener's behavior.
+	return chunks.join("\n");
 }
 
 /**
@@ -74,15 +74,15 @@ export function flattenQuery(
  * `injections.scm` / `locals.scm` stubs.
  */
 export function flattenAllIntoDir(
-    grammarId: string,
-    index: Map<string, GrammarIndexEntry>,
-    outDir: string,
+	grammarId: string,
+	index: Map<string, GrammarIndexEntry>,
+	outDir: string,
 ): void {
-    mkdirSync(outDir, { recursive: true });
-    for (const qtype of QUERY_TYPES) {
-        const content = flattenQuery(grammarId, qtype, index);
-        if (content) {
-            writeFileSync(join(outDir, `${qtype}.scm`), content);
-        }
-    }
+	mkdirSync(outDir, { recursive: true });
+	for (const qtype of QUERY_TYPES) {
+		const content = flattenQuery(grammarId, qtype, index);
+		if (content) {
+			writeFileSync(join(outDir, `${qtype}.scm`), content);
+		}
+	}
 }

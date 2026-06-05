@@ -19,28 +19,25 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { type GrammarIndexEntry, resolveCommit } from "./arborium-yaml.js";
 import {
-  type GrammarIndexEntry,
-  resolveCommit,
-} from "./arborium-yaml.js";
-import {
-  cloneDirFor,
-  detectLicenses,
-  ensureClone,
-  findNoticeFiles,
-  isLocalGrammar,
+	cloneDirFor,
+	detectLicenses,
+	ensureClone,
+	findNoticeFiles,
+	isLocalGrammar,
 } from "./grammar-clone.js";
-import { Logger, paths } from "./util.js";
+import { type Logger, paths } from "./util.js";
 
 export interface FetchLicenseArgs {
-  /** Grammar id (matches the index key). Used as the clone-cache key. */
-  id: string;
-  /** Resolved manifest entry. Source of `repo`, `commit`, and local-sentinel detection. */
-  entry: GrammarIndexEntry;
-  /** Where the LICENSE file(s) should be written. */
-  outDir: string;
-  /** Logger to surface progress + warnings on. */
-  log: Logger;
+	/** Grammar id (matches the index key). Used as the clone-cache key. */
+	id: string;
+	/** Resolved manifest entry. Source of `repo`, `commit`, and local-sentinel detection. */
+	entry: GrammarIndexEntry;
+	/** Where the LICENSE file(s) should be written. */
+	outDir: string;
+	/** Logger to surface progress + warnings on. */
+	log: Logger;
 }
 
 /**
@@ -49,44 +46,44 @@ export interface FetchLicenseArgs {
  * contains any LICENSE-ish file, returns immediately without cloning.
  */
 export async function fetchLicense(args: FetchLicenseArgs): Promise<void> {
-  if (existsSync(args.outDir)) {
-    const cachedLicenses = await detectLicenses(args.log, args.outDir);
-    const cachedNotices = findNoticeFiles(args.outDir);
-    if (cachedLicenses.length > 0 || cachedNotices.length > 0) {
-      args.log.info(`license already cached at ${args.outDir}`);
-      return;
-    }
-  }
+	if (existsSync(args.outDir)) {
+		const cachedLicenses = await detectLicenses(args.log, args.outDir);
+		const cachedNotices = findNoticeFiles(args.outDir);
+		if (cachedLicenses.length > 0 || cachedNotices.length > 0) {
+			args.log.info(`license already cached at ${args.outDir}`);
+			return;
+		}
+	}
 
-  const sourceDir = await sourceDirFor(args);
-  const licenses = await detectLicenses(args.log, sourceDir);
-  const notices = findNoticeFiles(sourceDir);
-  const allFiles = [
-    ...licenses.map((l) => l.file),
-    ...notices
-      .filter((n) => !licenses.some((l) => l.file === n.file))
-      .map((n) => n.file),
-  ];
+	const sourceDir = await sourceDirFor(args);
+	const licenses = await detectLicenses(args.log, sourceDir);
+	const notices = findNoticeFiles(sourceDir);
+	const allFiles = [
+		...licenses.map((l) => l.file),
+		...notices
+			.filter((n) => !licenses.some((l) => l.file === n.file))
+			.map((n) => n.file),
+	];
 
-  if (allFiles.length === 0) {
-    throw new Error(
-      `no LICENSE or NOTICE files found at ${sourceDir} for ${args.id}`,
-    );
-  }
+	if (allFiles.length === 0) {
+		throw new Error(
+			`no LICENSE or NOTICE files found at ${sourceDir} for ${args.id}`,
+		);
+	}
 
-  mkdirSync(args.outDir, { recursive: true });
-  for (const fname of allFiles) {
-    copyFileSync(join(sourceDir, fname), join(args.outDir, fname));
-  }
+	mkdirSync(args.outDir, { recursive: true });
+	for (const fname of allFiles) {
+		copyFileSync(join(sourceDir, fname), join(args.outDir, fname));
+	}
 
-  // Tag dual-licensed grammars (multi-LICENSE) and Apache projects
-  // (NOTICE) so `--license already cached` runs are still informative.
-  const detected = licenses
-    .map((l) => `${l.file}=${l.spdx}@${l.score.toFixed(3)}`)
-    .join(", ");
-  args.log.step(
-    `staged ${allFiles.length} attribution file(s) from ${sourceDir}: ${detected}${notices.length > 0 ? ` (+${notices.length} NOTICE)` : ""}`,
-  );
+	// Tag dual-licensed grammars (multi-LICENSE) and Apache projects
+	// (NOTICE) so `--license already cached` runs are still informative.
+	const detected = licenses
+		.map((l) => `${l.file}=${l.spdx}@${l.score.toFixed(3)}`)
+		.join(", ");
+	args.log.step(
+		`staged ${allFiles.length} attribution file(s) from ${sourceDir}: ${detected}${notices.length > 0 ? ` (+${notices.length} NOTICE)` : ""}`,
+	);
 }
 
 /**
@@ -96,16 +93,16 @@ export async function fetchLicense(args: FetchLicenseArgs): Promise<void> {
  * a shallow clone of the upstream at its (override-resolved) commit.
  */
 async function sourceDirFor(args: FetchLicenseArgs): Promise<string> {
-  if (isLocalGrammar(args.entry)) {
-    return paths().submoduleRoot;
-  }
-  if (!args.entry.repo) {
-    throw new Error(
-      `${args.id}: arborium.yaml is missing a top-level \`repo:\` field`,
-    );
-  }
-  const cloneDir = cloneDirFor(args.id);
-  const commit = resolveCommit(args.id, args.entry);
-  await ensureClone(args.log, cloneDir, args.entry.repo, commit);
-  return cloneDir;
+	if (isLocalGrammar(args.entry)) {
+		return paths().submoduleRoot;
+	}
+	if (!args.entry.repo) {
+		throw new Error(
+			`${args.id}: arborium.yaml is missing a top-level \`repo:\` field`,
+		);
+	}
+	const cloneDir = cloneDirFor(args.id);
+	const commit = resolveCommit(args.id, args.entry);
+	await ensureClone(args.log, cloneDir, args.entry.repo, commit);
+	return cloneDir;
 }
