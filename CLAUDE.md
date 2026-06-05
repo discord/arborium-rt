@@ -113,9 +113,15 @@ The Rust SIDE_MODULE has three modules, each with a single job:
   coalesce → theme pipeline. Mirrors `arborium_highlight::HighlighterCore`
   upstream but drops the async `GrammarProvider` because registry lookups
   are just `HashMap` hits. `MAX_INJECTION_DEPTH = 32` is a hard cap against
-  pathological grammars. Delegates HTML rendering to
-  `arborium_highlight::spans_to_html` so output stays lock-step with the
-  native Rust highlighter.
+  pathological grammars. Both the themed-span and HTML outputs render from
+  the same resolved span set (`dedup_and_tag` + `coalesce_by_tag`); HTML
+  goes through this module's own `tagged_spans_to_html` rather than
+  `arborium_highlight::spans_to_html`, because the upstream renderer dedups
+  the *raw* span set and mis-resolves the overlapping captures recursive
+  injection produces at depth ≥ 2 (e.g. markdown's fenced-code literal
+  enclosing an injected JS keyword). `tagged_spans_to_html` resolves
+  nested spans innermost-wins and skips zero-width spans (whose
+  coincident open/close events would otherwise corrupt the render stack).
 
 ### TypeScript consumer package (`packages/arborium-rt/`)
 

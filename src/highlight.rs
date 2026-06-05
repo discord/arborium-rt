@@ -9,14 +9,18 @@
 //! The structure mirrors `arborium_highlight::HighlighterCore` upstream,
 //! but avoids the async `GrammarProvider` trait — grammar lookups here are
 //! just `HashMap` hits, so there's no reason to drag a poll-based wrapper
-//! through the WASM binary. The span rendering is delegated to
-//! `arborium_highlight::spans_to_html` so HTML output stays lock-step with
-//! the native Rust highlighter.
+//! through the WASM binary. HTML rendering goes through this module's own
+//! `tagged_spans_to_html` rather than `arborium_highlight::spans_to_html`:
+//! the upstream renderer dedups the *raw* span set internally, which
+//! mis-resolves the overlapping captures recursive injection produces at
+//! depth >= 2. Rendering from the already-resolved (`dedup_and_tag` +
+//! `coalesce_by_tag`) spans instead keeps HTML output lock-step with the
+//! themed-span output.
 
 use std::collections::{HashMap, HashSet};
 
-use arborium_highlight::{HtmlFormat, Span, spans_to_html};
-use arborium_theme::tag_for_capture;
+use arborium_highlight::{HtmlFormat, Span, html_escape};
+use arborium_theme::{tag_for_capture, tag_to_name};
 use arborium_wire::Utf8Injection;
 use serde::Serialize;
 
@@ -105,8 +109,17 @@ pub(crate) fn highlight_to_html(
     format: HtmlFormat,
 ) -> Result<WireHtmlOutput, HighlightError> {
     let (source, raw_spans, missing, timed_out) = collect_spans(reg, session_id, max_depth)?;
+    // Render from the same resolved spans the themed path produces — NOT the
+    // raw overlapping ones. `arborium_highlight::spans_to_html` runs its own
+    // dedup over the raw set, which mis-resolves the overlapping captures that
+    // recursive injection produces (e.g. markdown's fenced-code literal
+    // enclosing an injected JS keyword at depth >= 2), dropping the inner
+    // capture to the enclosing one. Routing through `dedup_and_tag` +
+    // `coalesce_by_tag` keeps HTML output lock-step with
+    // `highlight_to_themed_utf16`.
+    let tagged = coalesce_by_tag(dedup_and_tag(raw_spans));
     Ok(WireHtmlOutput {
-        html: spans_to_html(&source, raw_spans, &format),
+        html: tagged_spans_to_html(&source, tagged, &format),
         missing_injections: missing.into_iter().collect(),
         timed_out_languages: sorted(timed_out),
     })
@@ -318,6 +331,127 @@ fn coalesce_by_tag(spans: Vec<TaggedByteSpan>) -> Vec<TaggedByteSpan> {
         out.push(span);
     }
     out
+}
+
+/// Opening/closing markup for one theme tag, per `HtmlFormat`. Mirrors the
+/// private `make_html_tags` in `arborium_highlight::render` so custom-element
+/// and class-name output matches the upstream renderer byte-for-byte.
+fn make_html_tags(tag: &str, format: &HtmlFormat) -> (String, String) {
+    match format {
+        HtmlFormat::CustomElements => (format!("<a-{tag}>"), format!("</a-{tag}>")),
+        HtmlFormat::CustomElementsWithPrefix(prefix) => {
+            (format!("<{prefix}-{tag}>"), format!("</{prefix}-{tag}>"))
+        }
+        HtmlFormat::ClassNames => match tag_to_name(tag) {
+            Some(name) => (format!("<span class=\"{name}\">"), "</span>".to_string()),
+            None => ("<span>".to_string(), "</span>".to_string()),
+        },
+        HtmlFormat::ClassNamesWithPrefix(prefix) => match tag_to_name(tag) {
+            Some(name) => (
+                format!("<span class=\"{prefix}-{name}\">"),
+                "</span>".to_string(),
+            ),
+            None => ("<span>".to_string(), "</span>".to_string()),
+        },
+    }
+}
+
+/// Render already-resolved (dedup'd, tagged, coalesced) byte spans to HTML.
+///
+/// Unlike `arborium_highlight::spans_to_html`, this consumes spans that have
+/// been through `dedup_and_tag` + `coalesce_by_tag`, so the only overlaps left
+/// are proper nestings introduced by recursive language injection — an outer
+/// span (e.g. markdown's fenced-code literal) fully containing inner ones
+/// (e.g. an injected JS keyword). It resolves those innermost-wins: each run of
+/// source text is emitted with the tag of the narrowest span covering it, which
+/// keeps the output consistent with `highlight_to_themed_utf16`'s spans.
+///
+/// Like the upstream renderer, trailing newlines are trimmed so the output
+/// embeds cleanly in `<pre><code>` without dangling whitespace.
+fn tagged_spans_to_html(source: &str, spans: Vec<TaggedByteSpan>, format: &HtmlFormat) -> String {
+    let source = source.trim_end_matches('\n');
+
+    // Drop zero-width spans. They render no text, but their open/close events
+    // share a position: ends sort before starts, so the close fires before the
+    // open and the span is pushed onto the stack but never popped — leaving a
+    // stray tag on top that would steal the next run of text. (Injected
+    // grammars emit these, e.g. a zero-width marker at a statement boundary.)
+    let mut spans: Vec<TaggedByteSpan> = spans.into_iter().filter(|s| s.start < s.end).collect();
+    if spans.is_empty() {
+        return html_escape(source);
+    }
+
+    // Enclosing spans must open before the spans they contain, so sort by
+    // (start asc, end desc): at a shared start the widest span sorts first and
+    // lands deeper in the stack, leaving the narrowest (innermost) on top.
+    spans.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.end.cmp(&a.end)));
+
+    struct Event {
+        position: u32,
+        is_start: bool,
+        index: usize,
+    }
+
+    // Boundary events: (position, is_start, span index). At a shared position,
+    // closes sort before opens (`false` < `true`) so a span ending where the
+    // next begins doesn't transiently nest inside it.
+    let mut events: Vec<Event> = Vec::with_capacity(spans.len() * 2);
+    for (i, s) in spans.iter().enumerate() {
+        events.push(Event {
+            position: s.start,
+            is_start: true,
+            index: i,
+        });
+        events.push(Event {
+            position: s.end,
+            is_start: false,
+            index: i,
+        });
+    }
+    events.sort_by(|a, b| {
+        a.position
+            .cmp(&b.position)
+            .then_with(|| a.is_start.cmp(&b.is_start))
+    });
+
+    let mut html = String::with_capacity(source.len() * 2);
+    let mut last_pos: usize = 0;
+    let mut stack: Vec<usize> = Vec::new();
+
+    let mut emit = |stack: &[usize], text: &str| {
+        if let Some(&top) = stack.last() {
+            let (open, close) = make_html_tags(spans[top].tag, format);
+            html.push_str(&open);
+            html.push_str(&html_escape(text));
+            html.push_str(&close);
+        } else {
+            html.push_str(&html_escape(text));
+        }
+    };
+
+    for Event {
+        position,
+        is_start,
+        index,
+    } in events
+    {
+        let pos = position as usize;
+        if pos > last_pos && pos <= source.len() {
+            emit(&stack, &source[last_pos..pos]);
+            last_pos = pos;
+        }
+        if is_start {
+            stack.push(index);
+        } else if let Some(p) = stack.iter().rposition(|&x| x == index) {
+            stack.remove(p);
+        }
+    }
+
+    if last_pos < source.len() {
+        emit(&stack, &source[last_pos..]);
+    }
+
+    html
 }
 
 /// Convert all span endpoints from UTF-8 byte offsets to UTF-16 code unit
