@@ -36,3 +36,47 @@ export const MARKDOWN_INJECTIONS_SCM = resolve(
 	repoRoot,
 	"target/grammars/markdown/injections.scm",
 );
+export const MARKDOWN_INLINE_GRAMMAR_WASM = resolve(
+	repoRoot,
+	"target/grammars/markdown_inline/tree-sitter-markdown_inline.wasm",
+);
+export const MARKDOWN_INLINE_HIGHLIGHTS_SCM = resolve(
+	repoRoot,
+	"target/grammars/markdown_inline/highlights.scm",
+);
+export const MARKDOWN_INLINE_INJECTIONS_SCM = resolve(
+	repoRoot,
+	"target/grammars/markdown_inline/injections.scm",
+);
+export const HTML_GRAMMAR_WASM = resolve(
+	repoRoot,
+	"target/grammars/html/tree-sitter-html.wasm",
+);
+export const HTML_HIGHLIGHTS_SCM = resolve(
+	repoRoot,
+	"target/grammars/html/highlights.scm",
+);
+export const HTML_INJECTIONS_SCM = resolve(
+	repoRoot,
+	"target/grammars/html/injections.scm",
+);
+export const CSS_GRAMMAR_WASM = resolve(
+	repoRoot,
+	"target/grammars/css/tree-sitter-css.wasm",
+);
+export const CSS_HIGHLIGHTS_SCM = resolve(
+	repoRoot,
+	"target/grammars/css/highlights.scm",
+);
+export const JAVASCRIPT_GRAMMAR_WASM = resolve(
+	repoRoot,
+	"target/grammars/javascript/tree-sitter-javascript.wasm",
+);
+export const JAVASCRIPT_HIGHLIGHTS_SCM = resolve(
+	repoRoot,
+	"target/grammars/javascript/highlights.scm",
+);
+export const JAVASCRIPT_INJECTIONS_SCM = resolve(
+	repoRoot,
+	"target/grammars/javascript/injections.scm",
+);
