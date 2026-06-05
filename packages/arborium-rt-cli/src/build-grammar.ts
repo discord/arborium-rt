@@ -173,6 +173,33 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
 	// --- link -----------------------------------------------------------------
 	const linker = scannerCxx ? "em++" : "emcc";
 	const wasmOut = join(outDir, `tree-sitter-${args.lang}.wasm`);
+
+	// The language entry point must be exported. When the grammar ships an
+	// external scanner, its five `tree_sitter_<sym>_external_scanner_*`
+	// entry points must be exported too. The generated parser table stores
+	// them as function pointers, which emscripten emits as `GOT.func`
+	// imports that the MAIN_MODULE host's dynamic linker resolves against
+	// this side module's *exports* at load time. emcc 5.x auto-exports such
+	// address-taken functions, but the pinned CI toolchain (emsdk 4.0.15)
+	// does not under SIDE_MODULE=2 — the GOT entries are left unresolved and
+	// the host throws `bad export type for 'tree_sitter_<sym>_external_scanner_create': undefined`
+	// when the grammar is loaded. List them explicitly so the wasm loads on
+	// every supported emsdk. (Upstream tree-sitter sidesteps this by building
+	// grammars as wasm32-unknown-wasi `-shared` objects, where intra-module
+	// pointers resolve locally and no exports are needed.)
+	const exportedFns = [`_tree_sitter_${cSymbol}`];
+	if (scannerC || scannerCxx) {
+		for (const op of [
+			"create",
+			"destroy",
+			"scan",
+			"serialize",
+			"deserialize",
+		]) {
+			exportedFns.push(`_tree_sitter_${cSymbol}_external_scanner_${op}`);
+		}
+	}
+
 	log.step(
 		`linking tree-sitter-${args.lang}.wasm (${linker}, tree_sitter_${cSymbol})`,
 	);
@@ -185,7 +212,7 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
 			"-s",
 			"SIDE_MODULE=2",
 			"-s",
-			`EXPORTED_FUNCTIONS=_tree_sitter_${cSymbol}`,
+			`EXPORTED_FUNCTIONS=${exportedFns.join(",")}`,
 			"-o",
 			wasmOut,
 			...objs,
