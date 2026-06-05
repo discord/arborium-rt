@@ -37,15 +37,15 @@ jobs:
     outputs:
       groups: ${{ steps.list-groups.outputs.groups }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@nightly
@@ -91,7 +91,7 @@ jobs:
           echo "found groups: $groups"
 
       - name: Upload runtime wasm
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: runtime-wasm
           path: target/wasm32-unknown-emscripten/release/arborium_emscripten_runtime.wasm
@@ -99,7 +99,7 @@ jobs:
           retention-days: 7
 
       - name: Upload host wasm
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: host-wasm
           path: |
@@ -109,7 +109,7 @@ jobs:
           retention-days: 7
 
       - name: Upload patched tree-sitter CLI
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tree-sitter-cli
           path: ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
@@ -128,15 +128,15 @@ jobs:
       matrix:
         group: ${{ fromJSON(needs.prep.outputs.groups) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - name: Install emsdk 5.0.6
@@ -155,7 +155,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download patched tree-sitter CLI
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tree-sitter-cli
           path: ${{ env.TREE_SITTER_BIN_DIR }}
@@ -191,7 +191,7 @@ jobs:
       # the artifact 5–10×. Only the wasm + flattened .scm files are needed
       # downstream.
       - name: Upload grammar artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: grammars-${{ matrix.group }}
           path: |
@@ -213,34 +213,34 @@ jobs:
       tarball-name: ${{ steps.pack.outputs.tarball }}
       tarball-artifact: ${{ steps.pack.outputs.artifact-name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - name: pnpm install
         run: pnpm install --frozen-lockfile
 
       - name: Download runtime wasm
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: runtime-wasm
           path: target/wasm32-unknown-emscripten/release
 
       - name: Download host wasm
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: host-wasm
           path: target/host-wasm
 
       - name: Download all grammar artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: grammars-*
           path: target/grammars
@@ -307,7 +307,7 @@ jobs:
           echo "artifact-name=arborium-rt-${{ steps.meta.outputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Upload tarball artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.pack.outputs.artifact-name }}
           path: ${{ steps.pack.outputs.tarball }}
