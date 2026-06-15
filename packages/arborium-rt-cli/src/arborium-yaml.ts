@@ -25,8 +25,6 @@ export const DISABLED_GRAMMARS: Record<string, string> = {
 	cobol: "has performance issues",
 	nginx: "GPL licensed",
 	uiua: "MPL licensed",
-	prolog:
-		"manifest claims MIT but upstream LICENSE is AGPL-3.0; copyleft contamination, cannot ship",
 	vb: "upstream repo ships no LICENSE file; cannot attribute",
 };
 
