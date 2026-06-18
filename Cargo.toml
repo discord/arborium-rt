@@ -7,6 +7,11 @@ license = "MIT"
 
 [workspace]
 members = ["lib/wasm"]
+# The root `arborium-rt` package is just the target-agnostic rlib; the
+# publishable artifact is the `arborium-rt-wasm` cdylib SIDE_MODULE. Default a
+# bare `cargo build --release` to that member (it pulls the rlib in as a
+# dependency) so the build emits `arborium_rt_wasm.wasm` without `-p`/`--workspace`.
+default-members = ["lib/wasm"]
 exclude = ["third_party"]
 
 [dependencies]
