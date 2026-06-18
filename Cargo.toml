@@ -1,12 +1,13 @@
 [package]
-name = "arborium-emscripten-runtime"
+name = "arborium-rt"
 version = "0.1.0"
 edition = "2024"
 description = "Shared arborium plugin runtime packaged as an emscripten SIDE_MODULE"
 license = "MIT"
 
-[lib]
-crate-type = ["cdylib"]
+[workspace]
+members = ["lib/wasm"]
+exclude = ["third_party"]
 
 [dependencies]
 arborium-plugin-runtime = { path = "third_party/arborium/crates/arborium-plugin-runtime" }

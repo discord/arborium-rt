@@ -94,7 +94,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: runtime-wasm
-          path: target/wasm32-unknown-emscripten/release/arborium_emscripten_runtime.wasm
+          path: target/wasm32-unknown-emscripten/release/arborium_rt_wasm.wasm
           if-no-files-found: error
           retention-days: 7
 
@@ -269,7 +269,7 @@ jobs:
             echo ""
             echo "| File | Size |"
             echo "|------|------|"
-            find target/wasm32-unknown-emscripten/release/arborium_emscripten_runtime.wasm \
+            find target/wasm32-unknown-emscripten/release/arborium_rt_wasm.wasm \
                  target/host-wasm/web-tree-sitter.wasm \
                  target/grammars -name '*.wasm' \
               | sort \

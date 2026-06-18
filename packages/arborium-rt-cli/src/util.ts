@@ -43,12 +43,17 @@ export function findRepoRoot(start: string = process.cwd()): string {
 		const cargo = join(dir, "Cargo.toml");
 		if (existsSync(cargo)) {
 			const content = readFileSync(cargo, "utf8");
-			if (content.includes("arborium-emscripten-runtime")) return dir;
+			// Match the root package manifest specifically. A bare
+			// "arborium-rt" substring also matches lib/wasm's manifest
+			// (`name = "arborium-rt-wasm"` and its path dep on the root),
+			// which would resolve the repo root to lib/wasm/ when invoked
+			// from there. The closing quote pins this to the root crate.
+			if (content.includes('name = "arborium-rt"')) return dir;
 		}
 		const parent = dirname(dir);
 		if (parent === dir) {
 			throw new Error(
-				`not inside an arborium-rt checkout (no Cargo.toml declaring arborium-emscripten-runtime in ${start} or any ancestor)`,
+				`not inside an arborium-rt checkout (no Cargo.toml declaring arborium-rt in ${start} or any ancestor)`,
 			);
 		}
 		dir = parent;
@@ -142,7 +147,7 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
 			"target",
 			"wasm32-unknown-emscripten",
 			"release",
-			"arborium_emscripten_runtime.wasm",
+			"arborium_rt_wasm.wasm",
 		),
 		runtimePackageDir: join(repoRoot, "packages", "arborium-rt"),
 		cliPackageDir: join(repoRoot, "packages", "arborium-rt-cli"),

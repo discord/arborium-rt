@@ -1,0 +1,12 @@
+[package]
+name = "arborium-rt-wasm"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+arborium-rt = { path = "../.." }
+arborium-tree-sitter    = { path = "../../third_party/arborium/crates/arborium-tree-sitter" }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }

@@ -139,7 +139,7 @@ you load. Otherwise, expect the full asset set.
 ## Raw ABI
 
 If you need to skip the TS wrapper — e.g. to embed the runtime in a
-non-JS host, or to experiment against `src/abi.rs` directly — the
+non-JS host, or to experiment against `lib/wasm/src/lib.rs` directly — the
 surface is a set of `arborium_rt_*` `extern "C"` functions exchanging
 bytes through shared linear memory. A minimal JS driver:
 
@@ -220,8 +220,8 @@ minus the format + prefix args) and `JSON.parse` the payload into
 points with no theming, use `arborium_rt_parse_utf16`.
 
 The full C ABI is documented inline in
-[`src/abi.rs`](./src/abi.rs) — pointer ownership rules, return codes,
-and per-function contracts.
+[`lib/wasm/src/lib.rs`](./lib/wasm/src/lib.rs) — pointer ownership rules,
+return codes, and per-function contracts.
 
 ## Building from source
 
@@ -235,7 +235,7 @@ TL;DR:
 git clone --recurse-submodules <this-repo>
 cd arborium-rt
 ./scripts/arborium-rt bootstrap     # apply patches + render Cargo manifests
-cargo build --release               # arborium_emscripten_runtime.wasm
+cargo build --release               # arborium_rt_wasm.wasm (SIDE_MODULE)
 ./scripts/arborium-rt build-host    # web-tree-sitter.{wasm,mjs}
 ./scripts/arborium-rt build-all     # build all grammars
 pnpm install && pnpm -r build && pnpm -r test

@@ -1,8 +1,9 @@
 //! Grammar + session registry.
 //!
-//! A single global [`Mutex<Registry>`] (WASM is single-threaded so contention
-//! is zero — the `Mutex` just satisfies Rust's `Sync` bounds for statics)
-//! holds every registered grammar's [`PluginRuntime`] and routes sessions to
+//! A single global [`Mutex<Registry>`] (it satisfies Rust's `Sync` bound for
+//! the static; on the single-threaded wasm host contention is zero, while a
+//! multi-threaded host gets real mutual exclusion for free) holds every
+//! registered grammar's [`PluginRuntime`] and routes sessions to
 //! the grammar they belong to. Session IDs are allocated by the registry
 //! (not by the underlying `PluginRuntime`) so they're globally unique.
 //!
@@ -18,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 use arborium_plugin_runtime::{HighlightConfig, PluginRuntime};
 use arborium_tree_sitter::{Language, LanguageFn};
 
-pub(crate) struct Registry {
+pub struct Registry {
     grammars: HashMap<u32, GrammarEntry>,
     grammars_by_name: HashMap<String, u32>,
     next_grammar_id: u32,
@@ -26,18 +27,18 @@ pub(crate) struct Registry {
     next_session_id: u32,
 }
 
-pub(crate) struct GrammarEntry {
-    pub(crate) runtime: PluginRuntime,
-    pub(crate) language_name: String,
+pub struct GrammarEntry {
+    pub runtime: PluginRuntime,
+    pub language_name: String,
 }
 
-pub(crate) struct SessionEntry {
-    pub(crate) grammar_id: u32,
-    pub(crate) inner_id: u32,
+pub struct SessionEntry {
+    pub grammar_id: u32,
+    pub inner_id: u32,
     /// Mirror of the session's current text. Kept here so the highlight
     /// pipeline can slice injection sub-ranges without reaching into
     /// `PluginRuntime`'s private `Session::text`.
-    pub(crate) text: String,
+    pub text: String,
 }
 
 impl Registry {
@@ -51,7 +52,7 @@ impl Registry {
         }
     }
 
-    pub(crate) fn register_grammar(
+    pub fn register_grammar(
         &mut self,
         language_name: &str,
         language: Language,
@@ -90,7 +91,7 @@ impl Registry {
         Ok(id)
     }
 
-    pub(crate) fn unregister_grammar(&mut self, grammar_id: u32) {
+    pub fn unregister_grammar(&mut self, grammar_id: u32) {
         if let Some(entry) = self.grammars.remove(&grammar_id) {
             // Only clear the name map if it still points at *this* grammar;
             // a later registration under the same name may have overwritten it.
@@ -103,7 +104,7 @@ impl Registry {
         self.sessions.retain(|_, s| s.grammar_id != grammar_id);
     }
 
-    pub(crate) fn create_session(&mut self, grammar_id: u32) -> Option<u32> {
+    pub fn create_session(&mut self, grammar_id: u32) -> Option<u32> {
         let entry = self.grammars.get_mut(&grammar_id)?;
         let inner_id = entry.runtime.create_session();
         let session_id = self.next_session_id;
@@ -119,7 +120,7 @@ impl Registry {
         Some(session_id)
     }
 
-    pub(crate) fn free_session(&mut self, session_id: u32) {
+    pub fn free_session(&mut self, session_id: u32) {
         if let Some(entry) = self.sessions.remove(&session_id)
             && let Some(grammar) = self.grammars.get_mut(&entry.grammar_id)
         {
@@ -127,7 +128,7 @@ impl Registry {
         }
     }
 
-    pub(crate) fn set_text(&mut self, session_id: u32, text: &str) {
+    pub fn set_text(&mut self, session_id: u32, text: &str) {
         let Some(entry) = self.sessions.get_mut(&session_id) else {
             return;
         };
@@ -139,7 +140,7 @@ impl Registry {
         }
     }
 
-    pub(crate) fn cancel(&mut self, session_id: u32) {
+    pub fn cancel(&mut self, session_id: u32) {
         let Some(entry) = self.sessions.get(&session_id) else {
             return;
         };
@@ -150,7 +151,7 @@ impl Registry {
         }
     }
 
-    pub(crate) fn with_session<R>(
+    pub fn with_session<R>(
         &mut self,
         session_id: u32,
         f: impl FnOnce(&mut PluginRuntime, u32) -> R,
@@ -162,21 +163,21 @@ impl Registry {
         Some(f(&mut grammar.runtime, inner_id))
     }
 
-    pub(crate) fn session(&self, session_id: u32) -> Option<&SessionEntry> {
+    pub fn session(&self, session_id: u32) -> Option<&SessionEntry> {
         self.sessions.get(&session_id)
     }
 
-    pub(crate) fn grammar_mut(&mut self, grammar_id: u32) -> Option<&mut GrammarEntry> {
+    pub fn grammar_mut(&mut self, grammar_id: u32) -> Option<&mut GrammarEntry> {
         self.grammars.get_mut(&grammar_id)
     }
 
-    pub(crate) fn grammar_id_by_name(&self, name: &str) -> Option<u32> {
+    pub fn grammar_id_by_name(&self, name: &str) -> Option<u32> {
         self.grammars_by_name.get(name).copied()
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum RegistryError {
+pub enum RegistryError {
     QueryCompile,
     IdExhausted,
     InvalidLanguageName,
@@ -211,7 +212,7 @@ fn stash_language(language: Language) -> LanguageFn {
     unsafe { LanguageFn::from_raw(read_stashed) }
 }
 
-pub(crate) fn registry() -> &'static Mutex<Registry> {
+pub fn registry() -> &'static Mutex<Registry> {
     static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(Registry::new()))
 }

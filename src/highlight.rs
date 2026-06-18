@@ -1,4 +1,4 @@
-//! Full parse + highlight pipeline executed entirely inside the WASM module.
+//! Full parse + highlight pipeline, executed synchronously in-process.
 //!
 //! Input: a `session_id` whose primary text has been loaded via
 //! [`crate::registry::Registry::set_text`]. Output: either a `Vec` of themed
@@ -9,7 +9,7 @@
 //! The structure mirrors `arborium_highlight::HighlighterCore` upstream,
 //! but avoids the async `GrammarProvider` trait — grammar lookups here are
 //! just `HashMap` hits, so there's no reason to drag a poll-based wrapper
-//! through the WASM binary. HTML rendering goes through this module's own
+//! through the runtime. HTML rendering goes through this module's own
 //! `tagged_spans_to_html` rather than `arborium_highlight::spans_to_html`:
 //! the upstream renderer dedups the *raw* span set internally, which
 //! mis-resolves the overlapping captures recursive injection produces at
@@ -31,7 +31,7 @@ use crate::registry::Registry;
 const MAX_INJECTION_DEPTH: u32 = 32;
 
 #[derive(Debug)]
-pub(crate) enum HighlightError {
+pub enum HighlightError {
     UnknownSession,
     Parse,
 }
@@ -40,7 +40,7 @@ pub(crate) enum HighlightError {
 /// UTF-16 code units, and tagged with the short theme slot string (`"k"`,
 /// `"f"`, `"s"`, …) from `arborium_theme::tag_for_capture`.
 #[derive(Serialize)]
-pub(crate) struct WireThemedSpan {
+pub struct WireThemedSpan {
     pub start: u32,
     pub end: u32,
     /// Short theme tag — the same one the default `HtmlFormat::CustomElements`
@@ -51,7 +51,7 @@ pub(crate) struct WireThemedSpan {
 }
 
 #[derive(Serialize)]
-pub(crate) struct WireThemedOutput {
+pub struct WireThemedOutput {
     pub spans: Vec<WireThemedSpan>,
     /// Languages referenced by injection queries but not loaded in the
     /// registry. JavaScript can use this to auto-load grammars and retry.
@@ -68,7 +68,7 @@ pub(crate) struct WireThemedOutput {
 }
 
 #[derive(Serialize)]
-pub(crate) struct WireHtmlOutput {
+pub struct WireHtmlOutput {
     pub html: String,
     /// Languages referenced by injection queries but not loaded in the
     /// registry. JavaScript can use this to auto-load grammars and retry.
@@ -77,7 +77,7 @@ pub(crate) struct WireHtmlOutput {
     pub timed_out_languages: Vec<String>,
 }
 
-pub(crate) fn highlight_to_themed_utf16(
+pub fn highlight_to_themed_utf16(
     reg: &mut Registry,
     session_id: u32,
     max_depth: u32,
@@ -102,7 +102,7 @@ pub(crate) fn highlight_to_themed_utf16(
     })
 }
 
-pub(crate) fn highlight_to_html(
+pub fn highlight_to_html(
     reg: &mut Registry,
     session_id: u32,
     max_depth: u32,
@@ -499,7 +499,7 @@ fn byte_spans_to_utf16(source: &str, spans: Vec<TaggedByteSpan>) -> Vec<WireThem
 
 /// Decode an integer format code from the ABI into an `HtmlFormat`.
 /// Prefix is only consulted for the two `*WithPrefix` variants.
-pub(crate) fn decode_format(code: u32, prefix: &str) -> HtmlFormat {
+pub fn decode_format(code: u32, prefix: &str) -> HtmlFormat {
     match code {
         1 => HtmlFormat::CustomElementsWithPrefix(prefix.to_string()),
         2 => HtmlFormat::ClassNames,

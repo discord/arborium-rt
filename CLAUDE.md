@@ -14,8 +14,10 @@ baked into every grammar bundle.
 The repo produces one publishable npm package:
 
 - **`@discord/arborium-rt`** — the TypeScript runtime wrapper. Ships
-  `arborium_emscripten_runtime.wasm` (the Rust SIDE_MODULE, built for
-  `wasm32-unknown-emscripten` via `cargo build --release`), the
+  `arborium_emscripten_runtime.wasm` (the Rust SIDE_MODULE — built from the
+  `arborium-rt-wasm` crate for `wasm32-unknown-emscripten` via `cargo build
+  --release`, which emits `arborium_rt_wasm.wasm`; `stage` copies it under
+  the historical published filename), the
   `web-tree-sitter.{wasm,mjs}` MAIN_MODULE host (built by
   `./scripts/arborium-rt build-host`), every built grammar's wasm + scm
   under `packages/arborium-rt/dist/grammars/<lang>/`, and a single
@@ -101,16 +103,13 @@ pnpm --filter @discord/arborium-rt publish
 
 ## High-level architecture
 
-### Runtime crate (`src/`)
+### Runtime library crate (`arborium-rt`, in `src/`)
 
-The Rust SIDE_MODULE has three modules, each with a single job:
+The Rust runtime is split across two crates in a Cargo workspace. The root
+`arborium-rt` crate (an `rlib`, in `src/`) is the target-agnostic core — the
+registry and highlight pipeline, with no C ABI and no `cdylib` linkage. Both
+modules expose `pub` items so the per-target shim crates can drive them:
 
-- **`abi.rs`** — the `#[unsafe(no_mangle)] extern "C"` surface. Every
-  `arborium_rt_*` function here must also appear in the `EXPORTED_FUNCTIONS`
-  list in `.cargo/config.toml`, or the linker will strip it. Pointer rules:
-  input buffers are borrowed; output buffers are allocated in shared linear
-  memory and transferred to the caller, who frees them via
-  `arborium_rt_free(ptr, len)`. JSON is the wire format across this boundary.
 - **`registry.rs`** — single global `Mutex<Registry>` holding every registered
   grammar's `PluginRuntime`. Session IDs are globally unique and routed back
   to the owning grammar. Maintains a `name → grammar_id` map used by the
@@ -131,6 +130,23 @@ The Rust SIDE_MODULE has three modules, each with a single job:
   enclosing an injected JS keyword). `tagged_spans_to_html` resolves
   nested spans innermost-wins and skips zero-width spans (whose
   coincident open/close events would otherwise corrupt the render stack).
+
+### WASM shim crate (`arborium-rt-wasm`, in `lib/wasm/`)
+
+The emscripten `SIDE_MODULE=2` target. A thin `cdylib` that depends on the
+core `arborium-rt` crate and adds the C ABI:
+
+- **`lib/wasm/src/lib.rs`** — the `#[unsafe(no_mangle)] extern "C"` surface
+  (formerly `src/abi.rs`). Every `arborium_rt_*` function here must also
+  appear in the `EXPORTED_FUNCTIONS` list in `.cargo/config.toml`, or the
+  linker will strip it. Pointer rules: input buffers are borrowed; output
+  buffers are allocated in shared linear memory and transferred to the
+  caller, who frees them via `arborium_rt_free(ptr, len)`. JSON is the wire
+  format across this boundary. The shim holds no logic of its own — it
+  decodes pointers, calls into `arborium_rt::registry` /
+  `arborium_rt::highlight`, and serializes the result. This is the layer
+  that gets duplicated per target as new (non-wasm) hosts are added;
+  the core crate stays target-agnostic.
 
 ### TypeScript consumer package (`packages/arborium-rt/`)
 
@@ -174,8 +190,9 @@ Private, unpublished workspace package. Run directly from source via tsx
 through `./scripts/arborium-rt`. Entry point is `src/main.ts`; each
 subcommand is its own `src/<name>.ts` module. Shared
 helpers in `src/util.ts` (repo-root discovery via walking up for a
-`Cargo.toml` containing `arborium-emscripten-runtime`; overridable via
-`ARBORIUM_RT_ROOT`). The `build-host` module owns the two "extras" arrays
+`Cargo.toml` whose package line is `name = "arborium-rt"` — matched with
+the closing quote so it doesn't also hit `lib/wasm`'s `arborium-rt-wasm`
+manifest; overridable via `ARBORIUM_RT_ROOT`). The `build-host` module owns the two "extras" arrays
 (`EXTRA_TS_EXPORTS`, `EXTRA_LIBC_EXPORTS`) that expand upstream's export
 lists with plain `ts_*` symbols and libc/pthread calls Rust's `std` pulls in
 — these are the source of truth until upstream takes them. The host emcc
@@ -237,8 +254,10 @@ either submodule or tweaking a patch.
 
 ### Target layout
 
-- `target/wasm32-unknown-emscripten/release/arborium_emscripten_runtime.wasm`
-  — Rust SIDE_MODULE output (~1.1 MB uncompressed).
+- `target/wasm32-unknown-emscripten/release/arborium_rt_wasm.wasm`
+  — Rust SIDE_MODULE output (~1.1 MB uncompressed), emitted by the
+  `arborium-rt-wasm` cdylib. `stage` copies it into the runtime package's
+  `dist/runtime/arborium_emscripten_runtime.wasm` (the published filename).
 - `target/host-wasm/web-tree-sitter.{wasm,mjs}` — MAIN_MODULE host.
 - `target/grammars/<lang>/` — `tree-sitter-<lang>.wasm` +
   flattened `.scm` query files (written by `build-grammar`).
@@ -254,7 +273,7 @@ either submodule or tweaking a patch.
 
 ```sh
 /path/to/emsdk/upstream/bin/llvm-objdump --syms \
-  target/wasm32-unknown-emscripten/release/arborium_emscripten_runtime.wasm \
+  target/wasm32-unknown-emscripten/release/arborium_rt_wasm.wasm \
   | grep arborium_rt_
 ```
 
@@ -294,13 +313,18 @@ means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
 ## Conventions worth knowing
 
 - **`cargo build` defaults to `wasm32-unknown-emscripten`** via
-  `.cargo/config.toml`. Building for any other target is undefined — the
-  crate exists only to be loaded into an emscripten host.
+  `.cargo/config.toml`, and that default applies workspace-wide. The
+  `arborium-rt-wasm` cdylib only builds meaningfully for that target — it
+  exists to be loaded as a SIDE_MODULE into an emscripten host. The core
+  `arborium-rt` rlib is target-agnostic (it's the seam for future non-wasm
+  targets), but the pinned default still builds it for emscripten as the
+  cdylib's dependency; the `EXPORTED_FUNCTIONS`/`SIDE_MODULE` link-args only
+  take effect at the cdylib link step, so the rlib ignores them.
 - **Never edit `third_party/arborium/crates/*/Cargo.toml`** — they're
   generated from `.stpl.toml` templates by bootstrap. Edit the template or
   patch the template-rendering step in `bootstrap.ts` instead.
 - **Adding a new `arborium_rt_*` export requires three coordinated edits**:
-  the function in `src/abi.rs`, its name in `.cargo/config.toml`'s
+  the function in `lib/wasm/src/lib.rs`, its name in `.cargo/config.toml`'s
   `EXPORTED_FUNCTIONS` list, and the TS binding in
   `packages/arborium-rt/src/abi.ts` (plus a method on the wrapper class if
   user-facing). Forgetting any of these produces confusing runtime errors,
@@ -308,7 +332,7 @@ means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
 - **Adding a wasm `extern`** (e.g., pulling in a new libc or tree-sitter
   symbol) requires adding it to `EXTRA_TS_EXPORTS` or `EXTRA_LIBC_EXPORTS`
   in `packages/arborium-rt-cli/src/build-host.ts` and rebuilding the host.
-  Discover missing imports with `wasm-dis arborium_emscripten_runtime.wasm
+  Discover missing imports with `wasm-dis arborium_rt_wasm.wasm
   | grep '(import "env"'`.
 - **Bumping the submodule**: checkout new SHA in `third_party/arborium`,
   re-run `./scripts/arborium-rt bootstrap`. If patches no longer apply,

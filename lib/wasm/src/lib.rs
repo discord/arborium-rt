@@ -20,8 +20,10 @@ use std::slice;
 
 use arborium_tree_sitter::Language;
 
-use crate::highlight::{decode_format, highlight_to_html, highlight_to_themed_utf16};
-use crate::registry::registry;
+use arborium_rt::highlight::{
+    HighlightError, decode_format, highlight_to_html, highlight_to_themed_utf16,
+};
+use arborium_rt::registry::registry;
 
 /// Register a grammar by its `*const TSLanguage` (obtained from the grammar
 /// side module's `tree_sitter_<lang>()` export), its language name (used
@@ -98,11 +100,7 @@ pub extern "C" fn arborium_rt_free_session(session_id: u32) {
 /// Load UTF-8 text for a session. Replaces any previous text. Triggers an
 /// immediate parse (matching `PluginRuntime::set_text` semantics).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn arborium_rt_set_text(
-    session_id: u32,
-    text_ptr: *const u8,
-    text_len: u32,
-) {
+pub unsafe extern "C" fn arborium_rt_set_text(session_id: u32, text_ptr: *const u8, text_len: u32) {
     let text = match unsafe { str_from_parts(text_ptr, text_len) } {
         Some(s) => s,
         None => return,
@@ -177,8 +175,8 @@ pub unsafe extern "C" fn arborium_rt_highlight_to_spans_utf16(
     };
     let themed = match outcome {
         Ok(t) => t,
-        Err(crate::highlight::HighlightError::UnknownSession) => return 1,
-        Err(crate::highlight::HighlightError::Parse) => return 2,
+        Err(HighlightError::UnknownSession) => return 1,
+        Err(HighlightError::Parse) => return 2,
     };
     let json = match serde_json::to_vec(&themed) {
         Ok(v) => v,
@@ -227,8 +225,8 @@ pub unsafe extern "C" fn arborium_rt_highlight_to_html(
     };
     let html_output = match outcome {
         Ok(s) => s,
-        Err(crate::highlight::HighlightError::UnknownSession) => return 1,
-        Err(crate::highlight::HighlightError::Parse) => return 2,
+        Err(HighlightError::UnknownSession) => return 1,
+        Err(HighlightError::Parse) => return 2,
     };
     let json = match serde_json::to_vec(&html_output) {
         Ok(v) => v,
