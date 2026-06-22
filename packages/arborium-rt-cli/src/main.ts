@@ -12,7 +12,10 @@ import { applyPatches, bootstrap } from "./bootstrap.js";
 import { buildAll } from "./build-all.js";
 import { buildGrammar } from "./build-grammar.js";
 import { buildHost } from "./build-host.js";
+import { buildNode } from "./build-node.js";
+import { buildNodeGrammars } from "./build-node-grammars.js";
 import { buildPackage } from "./build-package.js";
+import { buildWasm } from "./build-wasm.js";
 import { flattenAllIntoDir, QUERY_TYPES } from "./flatten.js";
 import { packageAll } from "./package-all.js";
 import { stage } from "./stage.js";
@@ -26,6 +29,7 @@ arborium-rt <subcommand> [options]
 Subcommands:
   bootstrap                          apply-patches + build the patched tree-sitter CLI
   apply-patches                      reset submodules + apply patches + render Cargo.toml (no CLI build)
+  build-wasm                         build arborium_rt_wasm.wasm (SIDE_MODULE, wasm32-unknown-emscripten)
   build-host                         build web-tree-sitter.{wasm,mjs} (MAIN_MODULE)
   build-grammar <group> <lang>       build tree-sitter-<lang>.wasm + flatten queries
   package <group> <lang>             generate dist/grammars/<lang>/ inside the runtime package
@@ -33,6 +37,10 @@ Subcommands:
   build-all [--only a,b,c] [--group group-X] [-j N]
                                      build + package every grammar in the corpus
   package-all [--only a,b,c] [-j N]  regenerate dist/grammars/* from already-built grammars
+  build-node-grammars [--only a,b,c] [-j N]
+                                     stage parser.c + flattened queries + manifest for the Node addon
+  build-node [--only a,b,c] [-j N] [--skip-grammars]
+                                     build the statically-linked Node native addon (host triple)
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
   list-groups [--json]               print arborium groups with at least one buildable grammar
   notices                            regenerate THIRD_PARTY_NOTICES (shallow-clones every upstream + askalono)
@@ -45,8 +53,10 @@ Environment:
 
 Examples:
   arborium-rt bootstrap
+  arborium-rt build-wasm
   arborium-rt build-host
   arborium-rt build group-acorn json
+  arborium-rt build-node
 
 Publishing the runtime package is not a CLI subcommand — run
 \`pnpm publish\` directly from packages/arborium-rt/ once build-all +
@@ -62,6 +72,9 @@ async function main(argv: readonly string[]): Promise<number> {
 		case "apply-patches":
 			await applyPatches();
 			return 0;
+		case "build-wasm":
+			await buildWasm();
+			return 0;
 		case "build-host":
 			await buildHost();
 			return 0;
@@ -75,6 +88,10 @@ async function main(argv: readonly string[]): Promise<number> {
 			return cmdBuildAll(rest);
 		case "package-all":
 			return cmdPackageAll(rest);
+		case "build-node-grammars":
+			return cmdBuildNodeGrammars(rest);
+		case "build-node":
+			return cmdBuildNode(rest);
 		case "flatten-queries":
 			return cmdFlatten(rest);
 		case "list-groups":
@@ -183,6 +200,53 @@ async function cmdPackageAll(args: readonly string[]): Promise<number> {
 		...(jobs !== undefined ? { jobs } : {}),
 	});
 	return result.failed.length === 0 ? 0 : 1;
+}
+
+function parseOnly(raw: string | undefined): string[] | undefined {
+	if (!raw) return undefined;
+	const only = raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+	return only.length > 0 ? only : undefined;
+}
+
+async function cmdBuildNodeGrammars(args: readonly string[]): Promise<number> {
+	const { values } = parseArgs({
+		args: [...args],
+		allowPositionals: false,
+		options: {
+			only: { type: "string" },
+			jobs: { type: "string", short: "j" },
+		},
+	});
+	const only = parseOnly(values.only);
+	const jobs = parseJobs(values.jobs);
+	const result = await buildNodeGrammars({
+		...(only ? { only } : {}),
+		...(jobs !== undefined ? { jobs } : {}),
+	});
+	return result.failed.length === 0 ? 0 : 1;
+}
+
+async function cmdBuildNode(args: readonly string[]): Promise<number> {
+	const { values } = parseArgs({
+		args: [...args],
+		allowPositionals: false,
+		options: {
+			only: { type: "string" },
+			jobs: { type: "string", short: "j" },
+			"skip-grammars": { type: "boolean", default: false },
+		},
+	});
+	const only = parseOnly(values.only);
+	const jobs = parseJobs(values.jobs);
+	await buildNode({
+		...(only ? { only } : {}),
+		...(jobs !== undefined ? { jobs } : {}),
+		skipGrammars: values["skip-grammars"] === true,
+	});
+	return 0;
 }
 
 function parseJobs(raw: string | undefined): number | undefined {

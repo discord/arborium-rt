@@ -6,12 +6,14 @@ description = "Shared arborium plugin runtime packaged as an emscripten SIDE_MOD
 license = "MIT"
 
 [workspace]
-members = ["lib/wasm"]
-# The root `arborium-rt` package is just the target-agnostic rlib; the
-# publishable artifact is the `arborium-rt-wasm` cdylib SIDE_MODULE. Default a
-# bare `cargo build --release` to that member (it pulls the rlib in as a
-# dependency) so the build emits `arborium_rt_wasm.wasm` without `-p`/`--workspace`.
-default-members = ["lib/wasm"]
+members = ["lib/wasm", "lib/node"]
+# A bare `cargo build` builds only the target-agnostic core `arborium-rt`
+# rlib, natively. The deployable shims are per-target and must NOT be built by
+# default — `lib/wasm` only links for emscripten and `lib/node` needs a staged
+# grammar manifest. Build each explicitly:
+#   ./scripts/arborium-rt build-runtime   # arborium-rt-wasm SIDE_MODULE
+#   ./scripts/arborium-rt build-node      # arborium-rt-node addon
+default-members = ["."]
 exclude = ["third_party"]
 
 [dependencies]

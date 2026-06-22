@@ -76,7 +76,7 @@ jobs:
         run: ./scripts/arborium-rt bootstrap
 
       - name: Build runtime SIDE_MODULE
-        run: cargo build --release
+        run: ./scripts/arborium-rt build-wasm
 
       - name: Build web-tree-sitter host (MAIN_MODULE)
         run: ./scripts/arborium-rt build-host
@@ -200,6 +200,78 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Statically-linked Node native addon. Independent of the browser grammar
+  # artifacts — it stages and links its own copy of the whole corpus into one
+  # `.node`. Needs a Rust toolchain + the patched tree-sitter CLI (from `prep`)
+  # + a C/C++ compiler (preinstalled on the runner); NOT emcc.
+  node:
+    needs: prep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Download patched tree-sitter CLI
+        uses: actions/download-artifact@v8
+        with:
+          name: tree-sitter-cli
+          path: ${{ env.TREE_SITTER_BIN_DIR }}
+
+      - name: Make tree-sitter executable
+        run: chmod +x ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
+
+      # The patched submodule working tree doesn't propagate across jobs;
+      # apply-patches re-runs the working-tree half of bootstrap (reset +
+      # git apply + render Cargo.toml) so the addon's grammars and crates
+      # build with the same patches as everywhere else.
+      - name: Apply submodule patches
+        run: ./scripts/arborium-rt apply-patches
+
+      - name: Build Node native addon (all grammars)
+        run: ./scripts/arborium-rt build-node
+
+      - name: Annotate addon size
+        run: |
+          f=packages/arborium-rt-node/arborium-rt-node.node
+          bytes=$(stat -c %s "$f")
+          human=$(numfmt --to=iec-i --suffix=B --format='%.2f' "$bytes")
+          {
+            echo "## Node addon size"
+            echo ""
+            printf '`%s` — %s (%s bytes)\n' "$f" "$human" "$bytes"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Upload before running the package tests: the node package's `pretest`
+      # rebuilds the addon with a small `--only` grammar subset, which would
+      # otherwise overwrite the full-corpus artifact.
+      - name: Upload Node addon
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-addon-${{ runner.os }}-${{ runner.arch }}
+          path: packages/arborium-rt-node/arborium-rt-node.node
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Test Node addon package
+        run: pnpm --filter @discord/arborium-rt-node test
+
   # Aggregator: merge every group's grammar artifacts, stage host +
   # runtime wasms, run package-all to populate dist/grammars/ and
   # regenerate src/grammars.ts, then build, test, and pack the
@@ -283,8 +355,12 @@ jobs:
       - name: Build TypeScript packages
         run: pnpm -r build
 
+      # The Node addon package is built + tested in the `node` job (it needs a
+      # Rust toolchain + the patched tree-sitter CLI, which this job doesn't set
+      # up). Exclude it here so its `pretest` (which runs `build-node`) doesn't
+      # fire without those prerequisites.
       - name: Run tests
-        run: pnpm -r test
+        run: pnpm -r --filter='!@discord/arborium-rt-node' test
 
       - name: Resolve version
         id: meta

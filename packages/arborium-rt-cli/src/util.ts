@@ -96,6 +96,15 @@ export interface Paths {
 	readonly targetDir: string;
 	readonly grammarsOut: string;
 	/**
+	 * `target/node-grammars/` — staging root for the statically-linked Node
+	 * addon. Holds per-grammar generated `parser.c` + scanner + flattened
+	 * `.scm` files plus a top-level `manifest.json` that `lib/node/build.rs`
+	 * consumes to compile the C in and bake the queries as `&'static str`.
+	 */
+	readonly nodeGrammarsOut: string;
+	/** `packages/arborium-rt-node/` — the native-addon npm package. */
+	readonly nodePackageDir: string;
+	/**
 	 * Directory where per-grammar subdirs (index.js / index.d.ts / wasm /
 	 * .scm) are emitted. Lives inside the runtime package's `dist/` so the
 	 * subpath exports (`@discord/arborium-rt/grammars/<lang>`) resolve
@@ -140,6 +149,8 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
 		),
 		targetDir: join(repoRoot, "target"),
 		grammarsOut: join(repoRoot, "target", "grammars"),
+		nodeGrammarsOut: join(repoRoot, "target", "node-grammars"),
+		nodePackageDir: join(repoRoot, "packages", "arborium-rt-node"),
 		packagesOut: join(repoRoot, "packages", "arborium-rt", "dist", "grammars"),
 		hostWasmOut: join(repoRoot, "target", "host-wasm"),
 		runtimeWasm: join(

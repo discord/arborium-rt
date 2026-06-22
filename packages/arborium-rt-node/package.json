@@ -1,0 +1,36 @@
+{
+	"name": "@discord/arborium-rt-node",
+	"version": "0.1.0",
+	"description": "Statically-linked tree-sitter + arborium runtime for Node.js",
+	"license": "MIT",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/appellation/arborium-rt.git"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"arborium-rt-node.node"
+	],
+	"scripts": {
+		"build": "tsc",
+		"pretest": "../../scripts/arborium-rt build-node --only json,markdown,markdown_inline,html,css,javascript && tsc",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@types/node": "^25.6.0",
+		"typescript": "^5.7.3",
+		"vitest": "^3.0.5"
+	},
+	"engines": {
+		"node": ">=22"
+	}
+}

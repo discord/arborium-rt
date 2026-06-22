@@ -235,11 +235,15 @@ TL;DR:
 git clone --recurse-submodules <this-repo>
 cd arborium-rt
 ./scripts/arborium-rt bootstrap     # apply patches + render Cargo manifests
-cargo build --release               # arborium_rt_wasm.wasm (SIDE_MODULE)
+./scripts/arborium-rt build-wasm    # arborium_rt_wasm.wasm (SIDE_MODULE)
 ./scripts/arborium-rt build-host    # web-tree-sitter.{wasm,mjs}
-./scripts/arborium-rt build-all     # build all grammars
+./scripts/arborium-rt build-all     # build all grammars (browser)
+./scripts/arborium-rt build-node    # statically-linked Node addon (all grammars)
 pnpm install && pnpm -r build && pnpm -r test
 ```
+
+Each deployable target is built explicitly — a bare `cargo build` only
+builds the target-agnostic core `arborium-rt` rlib natively.
 
 ## License
 

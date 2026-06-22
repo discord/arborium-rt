@@ -102,8 +102,8 @@ if [[ "${SKIP_BUILD}" -eq 0 ]]; then
     step "bootstrap"
     ./scripts/arborium-rt bootstrap
 
-    step "cargo build --release (runtime SIDE_MODULE)"
-    cargo build --release
+    step "build-wasm (runtime SIDE_MODULE)"
+    ./scripts/arborium-rt build-wasm
 
     step "build-host (MAIN_MODULE)"
     ./scripts/arborium-rt build-host

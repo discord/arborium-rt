@@ -1,15 +1,19 @@
-# This crate only builds meaningfully for emscripten; pin the target so
-# `cargo build` from this directory does the right thing by default.
+# The workspace no longer pins a default build target. A bare `cargo build`
+# builds the target-agnostic core `arborium-rt` rlib natively (see
+# `default-members` in the root Cargo.toml); each deployable target is built
+# explicitly through the CLI:
 #
-# Building for any other target (including wasm32-unknown-unknown) is
-# undefined behaviour for this crate — it's designed to be loaded as a
+#   ./scripts/arborium-rt build-runtime   # wasm SIDE_MODULE (emscripten)
+#   ./scripts/arborium-rt build-node      # native Node addon (host triple)
+#
+# Those commands set CARGO_BUILD_TARGET (and, for the wasm build,
+# CARGO_UNSTABLE_BUILD_STD) in the environment rather than here, so the global
+# default stays native and the two shims don't fight over one pinned target.
+#
+# The block below is target-scoped: its link args apply ONLY when building for
+# wasm32-unknown-emscripten, i.e. only under `build-runtime`. Building the wasm
+# cdylib for any other target is undefined — it exists to be loaded as a
 # SIDE_MODULE into an emscripten MAIN_MODULE runtime.
-
-[build]
-target = "wasm32-unknown-emscripten"
-
-[unstable]
-build-std = ["std", "panic_abort"]
 
 [target.wasm32-unknown-emscripten]
 rustflags = [

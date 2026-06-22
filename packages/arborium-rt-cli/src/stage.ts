@@ -22,7 +22,7 @@ export async function stage(): Promise<void> {
 	}
 	if (!existsSync(p.runtimeWasm)) {
 		throw new Error(
-			`runtime wasm not found at ${p.runtimeWasm}. run \`cargo build --release\` first.`,
+			`runtime wasm not found at ${p.runtimeWasm}. run \`arborium-rt build-wasm\` first.`,
 		);
 	}
 
