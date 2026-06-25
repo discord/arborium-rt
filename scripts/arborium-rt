@@ -13,9 +13,4 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLI_DIR="${REPO_ROOT}/cli"
 
-if [[ ! -x "${CLI_DIR}/node_modules/.bin/tsx" ]]; then
-    echo "==> first-time setup (pnpm install)" >&2
-    (cd "${REPO_ROOT}" && pnpm install --silent)
-fi
-
-exec "${CLI_DIR}/node_modules/.bin/tsx" "${CLI_DIR}/src/main.ts" "$@"
+exec "node" "${CLI_DIR}/src/main.ts" "$@"

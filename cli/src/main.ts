@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { buildGrammarIndex } from "./arborium-yaml.js";
-import { applyPatches, bootstrap } from "./bootstrap.js";
+import { applyPatches, bootstrap } from "./commands/bootstrap.ts";
 import { buildAll } from "./build-all.js";
 import { buildGrammar } from "./build-grammar.js";
 import { buildHost } from "./build-host.js";

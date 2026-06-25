@@ -3,30 +3,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-
-/**
- * Tagged logger. Every line written through a logger (including lines
- * emitted by child processes started via `run(logger, ...)`) is prefixed
- * with `[<prefix>] ` so parallel builds stay readable on a shared stderr.
- */
-export class Logger {
-	constructor(readonly prefix: string) {}
-
-	/** Structured "==>" progress line. */
-	step(msg: string): void {
-		process.stderr.write(`[${this.prefix}] ==> ${msg}\n`);
-	}
-
-	/** Non-fatal warning. */
-	warn(msg: string): void {
-		process.stderr.write(`[${this.prefix}] warn: ${msg}\n`);
-	}
-
-	/** Plain tagged line — no step/warn decoration. */
-	info(msg: string): void {
-		process.stderr.write(`[${this.prefix}] ${msg}\n`);
-	}
-}
+import type { Writable } from "node:stream";
 
 /**
  * Walk up from `start` until a directory contains a marker file identifying
@@ -151,7 +128,13 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
 		grammarsOut: join(repoRoot, "target", "grammars"),
 		nodeGrammarsOut: join(repoRoot, "target", "node-grammars"),
 		nodePackageDir: join(repoRoot, "packages", "arborium-rt-node"),
-		packagesOut: join(repoRoot, "packages", "arborium-rt-wasm", "dist", "grammars"),
+		packagesOut: join(
+			repoRoot,
+			"packages",
+			"arborium-rt-wasm",
+			"dist",
+			"grammars",
+		),
 		hostWasmOut: join(repoRoot, "target", "host-wasm"),
 		runtimeWasm: join(
 			repoRoot,
@@ -204,14 +187,15 @@ export interface RunOptions {
  * `runSilent` instead.
  */
 export async function run(
-	logger: Logger,
+	output: Writable,
 	cmd: string,
 	args: readonly string[],
 	options: RunOptions = {},
 ): Promise<void> {
 	await new Promise<void>((resolvePromise, rejectPromise) => {
 		const wantsInput = options.input !== undefined;
-		const child = spawn(cmd, args as string[], {
+
+		const child = spawn(cmd, args, {
 			cwd: options.cwd,
 			env: options.env ? { ...process.env, ...options.env } : process.env,
 			stdio: [wantsInput ? "pipe" : "ignore", "pipe", "pipe"],
@@ -219,9 +203,9 @@ export async function run(
 		if (wantsInput) {
 			child.stdin?.end(options.input);
 		}
-		const tag = `[${logger.prefix}] `;
-		pipePrefixed(child.stdout, tag);
-		pipePrefixed(child.stderr, tag);
+		child.stdout?.pipe(output);
+		child.stderr?.pipe(output);
+
 		child.once("error", rejectPromise);
 		child.once("close", (code) => {
 			if (code === 0) resolvePromise();
