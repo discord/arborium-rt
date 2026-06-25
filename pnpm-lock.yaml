@@ -12,22 +12,7 @@ importers:
         specifier: 2.4.16
         version: 2.4.16
 
-  packages/arborium-rt:
-    devDependencies:
-      '@types/emscripten':
-        specifier: ^1.41.5
-        version: 1.41.5
-      '@types/node':
-        specifier: ^25.6.0
-        version: 25.6.0
-      typescript:
-        specifier: ^5.7.3
-        version: 5.9.3
-      vitest:
-        specifier: ^3.0.5
-        version: 3.2.4(@types/node@25.6.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)
-
-  packages/arborium-rt-cli:
+  cli:
     dependencies:
       spdx-satisfies:
         specifier: ^6.0.0
@@ -54,6 +39,21 @@ importers:
 
   packages/arborium-rt-node:
     devDependencies:
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.4(@types/node@25.6.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)
+
+  packages/arborium-rt-wasm:
+    devDependencies:
+      '@types/emscripten':
+        specifier: ^1.41.5
+        version: 1.41.5
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0

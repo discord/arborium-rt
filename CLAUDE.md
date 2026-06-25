@@ -90,8 +90,6 @@ pnpm --filter @discord/arborium-rt test -- arborium.test.mts
 
 # Publish the runtime package (after build-all + stage).
 pnpm --filter @discord/arborium-rt publish
-# Or, for a full tag + GitHub Release with the tarball attached:
-./scripts/release [--tag vX.Y.Z] [--draft] [--dry-run]
 ```
 
 ### Prereqs the tooling expects on PATH

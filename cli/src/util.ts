@@ -151,7 +151,7 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
 		grammarsOut: join(repoRoot, "target", "grammars"),
 		nodeGrammarsOut: join(repoRoot, "target", "node-grammars"),
 		nodePackageDir: join(repoRoot, "packages", "arborium-rt-node"),
-		packagesOut: join(repoRoot, "packages", "arborium-rt", "dist", "grammars"),
+		packagesOut: join(repoRoot, "packages", "arborium-rt-wasm", "dist", "grammars"),
 		hostWasmOut: join(repoRoot, "target", "host-wasm"),
 		runtimeWasm: join(
 			repoRoot,
