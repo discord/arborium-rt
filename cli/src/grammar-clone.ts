@@ -4,17 +4,11 @@
 // THIRD_PARTY_NOTICES generator. The cache at target/upstream-cache/<id>/
 // is shared between the two so successive runs don't re-clone.
 
-import {
-	existsSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-} from "node:fs";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-
-import type { GrammarIndexEntry } from "./arborium-yaml.js";
-import { type Logger, paths, run, runCapture } from "./util.js";
+import type { Writable } from "node:stream";
+import type { GrammarIndexEntry } from "./arborium-yaml.ts";
+import { paths, run, runCapture } from "./util.ts";
 
 /** Reject any askalono detection below this score as "not actually known". */
 export const MIN_SCORE = 0.8;
@@ -113,15 +107,15 @@ function upgradeSpdx(spdx: string, text: string): string {
  *   arbitrary SHAs.
  */
 export async function ensureClone(
-	log: Logger,
+	output: Writable,
 	cloneDir: string,
 	repo: string,
 	commit: string | undefined,
 ): Promise<void> {
-	if (commit && existsSync(join(cloneDir, ".git"))) {
+	if (commit && (await stat(join(cloneDir, ".git"))).isDirectory()) {
 		try {
 			const head = (
-				await runCapture(log, "git", ["-C", cloneDir, "rev-parse", "HEAD"])
+				await runCapture(output, "git", ["-C", cloneDir, "rev-parse", "HEAD"])
 			).trim();
 			if (head === commit) return;
 		} catch {
@@ -129,16 +123,21 @@ export async function ensureClone(
 		}
 	}
 
-	if (existsSync(cloneDir)) {
-		rmSync(cloneDir, { recursive: true, force: true });
-	}
-	mkdirSync(cloneDir, { recursive: true });
+	await rm(cloneDir, { recursive: true, force: true });
+	await mkdir(cloneDir, { recursive: true });
 
 	if (commit) {
 		try {
-			await run(log, "git", ["init", "--quiet", cloneDir]);
-			await run(log, "git", ["-C", cloneDir, "remote", "add", "origin", repo]);
-			await run(log, "git", [
+			await run(output, "git", ["init", "--quiet", cloneDir]);
+			await run(output, "git", [
+				"-C",
+				cloneDir,
+				"remote",
+				"add",
+				"origin",
+				repo,
+			]);
+			await run(output, "git", [
 				"-C",
 				cloneDir,
 				"fetch",
@@ -148,7 +147,7 @@ export async function ensureClone(
 				"origin",
 				commit,
 			]);
-			await run(log, "git", [
+			await run(output, "git", [
 				"-C",
 				cloneDir,
 				"-c",
@@ -158,23 +157,18 @@ export async function ensureClone(
 			]);
 			return;
 		} catch {
-			log.warn(
-				`fetch-by-SHA failed for ${repo}; falling back to blobless clone`,
-			);
-			rmSync(cloneDir, { recursive: true, force: true });
-			mkdirSync(cloneDir, { recursive: true });
+			await rm(cloneDir, { recursive: true, force: true });
+			await mkdir(cloneDir, { recursive: true });
 		}
-	}
 
-	if (commit) {
-		await run(log, "git", [
+		await run(output, "git", [
 			"clone",
 			"--filter=blob:none",
 			"--no-tags",
 			repo,
 			cloneDir,
 		]);
-		await run(log, "git", [
+		await run(output, "git", [
 			"-C",
 			cloneDir,
 			"-c",
@@ -183,7 +177,7 @@ export async function ensureClone(
 			commit,
 		]);
 	} else {
-		await run(log, "git", [
+		await run(output, "git", [
 			"clone",
 			"--depth",
 			"1",
@@ -201,10 +195,10 @@ export async function ensureClone(
  * are dropped silently here so neither fails the caller.
  */
 export async function detectLicenses(
-	log: Logger,
+	output: Writable,
 	dir: string,
 ): Promise<DetectedLicense[]> {
-	const stdout = await runCapture(log, "askalono", [
+	const stdout = await runCapture(output, "askalono", [
 		"--format",
 		"json",
 		"crawl",
@@ -231,7 +225,7 @@ export async function detectLicenses(
 
 		if (obj.error || !obj.result?.license) continue;
 
-		const text = readFileSync(obj.path, "utf8");
+		const text = await readFile(obj.path, "utf8");
 		out.push({
 			file: rel,
 			spdx: upgradeSpdx(obj.result.license.name, text),
@@ -243,15 +237,19 @@ export async function detectLicenses(
 }
 
 /** Depth-1 walk for upstream NOTICE files (Apache §4(d) attribution). */
-export function findNoticeFiles(dir: string): NoticeFile[] {
-	if (!existsSync(dir)) return [];
-	return readdirSync(dir, { withFileTypes: true })
-		.filter((e) => e.isFile() && NOTICE_FILE_RE.test(e.name))
-		.map((e) => ({
-			file: e.name,
-			text: readFileSync(join(dir, e.name), "utf8"),
-		}))
-		.sort((a, b) => a.file.localeCompare(b.file));
+export async function findNoticeFiles(dir: string): Promise<NoticeFile[]> {
+	return (
+		await Promise.all(
+			(
+				await readdir(dir, { withFileTypes: true })
+			)
+				.filter((e) => e.isFile() && NOTICE_FILE_RE.test(e.name))
+				.map(async (e) => ({
+					file: e.name,
+					text: await readFile(join(dir, e.name), "utf8"),
+				})),
+		)
+	).sort((a, b) => a.file.localeCompare(b.file));
 }
 
 function relativeFromDir(dir: string, abs: string): string | undefined {

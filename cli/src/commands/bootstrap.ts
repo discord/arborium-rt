@@ -95,7 +95,7 @@ export function applyPatches() {
 					"-fd",
 				]);
 
-				task.newListr(
+				return task.newListr(
 					await applyPatchDir(p.submoduleRoot, p.arboriumPatchesDir),
 				);
 			},
@@ -161,7 +161,7 @@ pub fn all() -> Vec<Theme> {
 					"-fd",
 				]);
 
-				task.newListr(
+				return task.newListr(
 					await applyPatchDir(p.treeSitterRoot, p.treeSitterPatchesDir),
 				);
 			},

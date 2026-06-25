@@ -12,10 +12,10 @@ import {
 	readdirSync,
 	symlinkSync,
 } from "node:fs";
+import { mkdir, symlink } from "node:fs/promises";
 import { join, relative } from "node:path";
-
+import type { ListrTask } from "listr2";
 import type { GrammarIndexEntry } from "./arborium-yaml.js";
-import type { Logger } from "./util.js";
 
 /**
  * Symlink each transitively-required dep's def/grammar/ dir into
@@ -27,49 +27,55 @@ export function stageNpmDeps(
 	start: GrammarIndexEntry,
 	index: Map<string, GrammarIndexEntry>,
 	buildDir: string,
-	log: Logger,
-): void {
+): ListrTask[] {
 	const staged = new Set<string>();
 
-	function walk(entry: GrammarIndexEntry): void {
+	function walk(entry: GrammarIndexEntry): ListrTask[] {
+		const tasks: ListrTask[] = [];
+
 		for (const dep of entry.grammar.dependencies ?? []) {
-			if (!dep.npm) continue;
-			if (staged.has(dep.npm)) continue;
+			tasks.push({
+				async task(_ctx, task) {
+					if (!dep.npm) return;
+					if (staged.has(dep.npm)) return;
 
-			// Convention: npm dep "tree-sitter-<X>" corresponds to arborium
-			// grammar id <X>. If the dep doesn't resolve, skip with a warning
-			// — some upstream deps (e.g. `tree-sitter-clojure` for commonlisp)
-			// are vendored under different group dirs, but the id-based
-			// lookup still finds them.
-			const depId = dep.npm.replace(/^tree-sitter-/, "");
-			const depEntry = index.get(depId);
-			if (!depEntry) {
-				log.warn(
-					`dep ${dep.npm} -> grammar id ${depId} not found in corpus; skipping`,
-				);
-				continue;
-			}
-			staged.add(dep.npm);
+					// Convention: npm dep "tree-sitter-<X>" corresponds to arborium
+					// grammar id <X>. If the dep doesn't resolve, skip with a warning
+					// — some upstream deps (e.g. `tree-sitter-clojure` for commonlisp)
+					// are vendored under different group dirs, but the id-based
+					// lookup still finds them.
+					const depId = dep.npm.replace(/^tree-sitter-/, "");
+					const depEntry = index.get(depId);
+					if (!depEntry) {
+						task.skip(
+							`dep ${dep.npm} -> grammar id ${depId} not found in corpus`,
+						);
+						return;
+					}
+					staged.add(dep.npm);
 
-			const linkPath = join(buildDir, "node_modules", dep.npm);
-			mkdirSync(join(buildDir, "node_modules"), { recursive: true });
-			const target = join(depEntry.defPath, "grammar");
-			try {
-				symlinkSync(target, linkPath, "dir");
-			} catch (e) {
-				const err = e as NodeJS.ErrnoException;
-				if (err.code !== "EEXIST") throw e;
-			}
-			log.step(
-				`staged node_modules/${dep.npm} -> ${relative(buildDir, target)}`,
-			);
+					const target = join(depEntry.defPath, "grammar");
+					task.output = `staging node_modules/${dep.npm} -> ${relative(buildDir, target)}`;
 
-			// Recurse so transitive deps (HLSL -> CPP -> C) are also staged.
-			walk(depEntry);
+					const linkPath = join(buildDir, "node_modules", dep.npm);
+					await mkdir(join(buildDir, "node_modules"), { recursive: true });
+					try {
+						await symlink(target, linkPath, "dir");
+					} catch (e) {
+						const err = e as NodeJS.ErrnoException;
+						if (err.code !== "EEXIST") throw e;
+					}
+
+					// Recurse so transitive deps (HLSL -> CPP -> C) are also staged.
+					return walk(depEntry);
+				},
+			});
 		}
+
+		return tasks;
 	}
 
-	walk(start);
+	return walk(start);
 }
 
 /**
@@ -128,7 +134,10 @@ export function stageGrammarSource(defDir: string, buildDir: string): string {
  * `schema.core.c` / `schema.json.c` / `schema.legacy.c`). parser.c is
  * deliberately excluded — we generate that fresh from grammar.js.
  */
-export function copySupportFiles(src: string, dst: string): void {
+export async function copySupportFiles(
+	src: string,
+	dst: string,
+): Promise<void> {
 	if (!existsSync(src)) return;
 	for (const entry of readdirSync(src, { withFileTypes: true })) {
 		const full = join(src, entry.name);
