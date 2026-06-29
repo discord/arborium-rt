@@ -253,39 +253,6 @@ export async function runCapture(
 	});
 }
 
-/** Equivalent of `command -v` — returns true if the tool is on PATH. */
-export async function hasCommand(cmd: string): Promise<boolean> {
-	return await new Promise<boolean>((resolvePromise) => {
-		const child = spawn("which", [cmd], { stdio: "ignore" });
-		child.once("error", () => resolvePromise(false));
-		child.once("close", (code) => resolvePromise(code === 0));
-	});
-}
-
-/**
- * Run `fn` over `items` with at most `concurrency` in flight. Items start in
- * order but may complete out of order. An exception in one item does not
- * abort the pool; callers are responsible for catching and collecting
- * per-item results inside `fn`.
- */
-export async function runPool<T>(
-	items: readonly T[],
-	concurrency: number,
-	fn: (item: T, index: number) => Promise<void>,
-): Promise<void> {
-	const n = Math.min(Math.max(1, concurrency), items.length);
-	let next = 0;
-	await Promise.all(
-		Array.from({ length: n }, async () => {
-			while (true) {
-				const i = next++;
-				if (i >= items.length) return;
-				await fn(items[i]!, i);
-			}
-		}),
-	);
-}
-
 export function normalizeCSymbol(cSymbol: string | undefined, lang: string) {
 	return cSymbol ?? lang.replace(/-/g, "_");
 }

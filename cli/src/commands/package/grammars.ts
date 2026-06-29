@@ -194,8 +194,8 @@ function regenerateRuntimeIndex(): ListrTask[] {
 		},
 		{
 			title: "regenerating THIRD_PARTY_NOTICES",
-			async task() {
-				await writeThirdPartyNotices();
+			task(_ctx, task) {
+				return task.newListr(writeThirdPartyNotices());
 			},
 		},
 	];

@@ -26,7 +26,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
+import type { Writable } from "node:stream";
 
+import type { ListrTask } from "listr2";
 import spdxSatisfies from "spdx-satisfies";
 
 import {
@@ -45,7 +47,7 @@ import {
 	MIN_SCORE,
 	type NoticeFile,
 } from "./grammar-clone.ts";
-import { hasCommand, paths, runPool } from "./util.ts";
+import { paths } from "./util.ts";
 
 /** Bounded clone parallelism. ~100 grammars × network-dominant; 8 is plenty. */
 const DEFAULT_CLONE_CONCURRENCY = 8;
@@ -75,71 +77,81 @@ interface NoticeEntry {
 	notices: NoticeFile[];
 }
 
-export async function writeThirdPartyNotices(): Promise<void> {
+export function writeThirdPartyNotices(): ListrTask[] {
 	const p = paths();
-
-	if (!(await hasCommand("askalono"))) {
-		throw new Error(
-			"askalono not on PATH — install via `cargo install --locked askalono-cli` or download from https://github.com/jpeddicord/askalono/releases (see CLAUDE.md prereqs)",
-		);
-	}
-
-	const index = await buildGrammarIndex(p.langsRoots);
-	const targets = [...index.entries()].sort(([a], [b]) => a.localeCompare(b));
-	if (targets.length === 0) {
-		process.stderr.write(
-			"notices: grammar index is empty; skipping notices generation\n",
-		);
-		return;
-	}
-
-	const entries: NoticeEntry[] = [];
-	const failed: Array<{ id: string; reason: string }> = [];
-
 	const concurrency = Math.max(
 		1,
 		Math.min(DEFAULT_CLONE_CONCURRENCY, availableParallelism()),
 	);
 
-	await runPool(targets, concurrency, async ([id, entry]) => {
-		try {
-			entries.push(await processGrammar(id, entry));
-		} catch (e) {
-			const reason = e instanceof Error ? e.message : String(e);
-			failed.push({ id, reason });
-		}
-	});
+	// Closure state threaded across the three tasks below — fresh per call, so
+	// standalone (`notices`) and nested (`package grammars`) runs never collide.
+	let targets: Array<[string, GrammarIndexEntry]> = [];
+	const entries: NoticeEntry[] = [];
+	const failed: Array<{ id: string; reason: string }> = [];
 
-	if (failed.length > 0) {
-		for (const { id, reason } of failed) {
-			process.stderr.write(`notices: ${id}: ${reason.split("\n")[0]}\n`);
-		}
-		throw new Error(
-			`notices generation failed for ${failed.length}/${targets.length} grammar(s); first failure: ${failed[0]!.id}: ${failed[0]!.reason.split("\n")[0]}`,
-		);
-	}
+	return [
+		{
+			title: "scanning grammar index",
+			async task() {
+				const index = await buildGrammarIndex(p.langsRoots);
+				targets = [...index.entries()].sort(([a], [b]) => a.localeCompare(b));
+			},
+		},
+		{
+			title: "collecting upstream licenses",
+			skip: () => targets.length === 0 && "grammar index is empty",
+			// One task per grammar — each clones (or reuses the cache), runs
+			// askalono, and reconciles. Failures are collected (exitOnError: false)
+			// so a single bad grammar doesn't abort the rest; the write task below
+			// hard-fails on any collected failure.
+			task(_ctx, task) {
+				return task.newListr(
+					targets.map(([id, entry]) => ({
+						title: id,
+						async task(_ctx, task) {
+							try {
+								entries.push(await processGrammar(id, entry, task.stdout()));
+							} catch (e) {
+								const reason = e instanceof Error ? e.message : String(e);
+								failed.push({ id, reason });
+								throw e;
+							}
+						},
+					})),
+					{ concurrent: concurrency, exitOnError: false },
+				);
+			},
+		},
+		{
+			title: "writing THIRD_PARTY_NOTICES",
+			skip: () => targets.length === 0,
+			async task() {
+				if (failed.length > 0) {
+					throw new Error(
+						`notices generation failed for ${failed.length}/${targets.length} grammar(s); first failure: ${failed[0]!.id}: ${failed[0]!.reason.split("\n")[0]}`,
+					);
+				}
 
-	entries.sort((a, b) => a.id.localeCompare(b.id));
-	const text = renderBundle(entries);
+				entries.sort((a, b) => a.id.localeCompare(b.id));
+				const text = renderBundle(entries);
 
-	await mkdir(join(p.runtimePackageDir, "dist"), { recursive: true });
-	await writeFile(
-		join(p.runtimePackageDir, "dist", "THIRD_PARTY_NOTICES"),
-		text,
-	);
-	await writeFile(join(p.repoRoot, "THIRD_PARTY_NOTICES"), text);
-
-	process.stderr.write(
-		`notices: wrote THIRD_PARTY_NOTICES (${entries.length} grammars, ${entries.reduce((n, e) => n + e.licenses.length, 0)} license file(s), ${entries.reduce((n, e) => n + e.notices.length, 0)} notice file(s))\n`,
-	);
+				await mkdir(join(p.runtimePackageDir, "dist"), { recursive: true });
+				await writeFile(
+					join(p.runtimePackageDir, "dist", "THIRD_PARTY_NOTICES"),
+					text,
+				);
+				await writeFile(join(p.repoRoot, "THIRD_PARTY_NOTICES"), text);
+			},
+		},
+	];
 }
 
 async function processGrammar(
 	id: string,
 	entry: GrammarIndexEntry,
+	output: Writable,
 ): Promise<NoticeEntry> {
-	const output = process.stderr;
-
 	if (isLocalGrammar(entry)) {
 		const arboriumRoot = paths().submoduleRoot;
 		const detections = await detectLicenses(output, arboriumRoot);

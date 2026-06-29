@@ -71,7 +71,7 @@ prog
 	.command("notices")
 	.describe("regenerate THIRD_PARTY_NOTICES from each grammar's upstream license")
 	.action(async () => {
-		await writeThirdPartyNotices();
+		await new Listr(writeThirdPartyNotices()).run();
 	});
 
 prog.parse(process.argv);
