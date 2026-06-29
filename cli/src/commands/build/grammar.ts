@@ -3,7 +3,7 @@
 
 import { copyFile, mkdir, rm } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { Listr } from "listr2";
+import type { ListrTask } from "listr2";
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,
@@ -43,13 +43,15 @@ interface BuildGrammarContext {
 	hasScanner: boolean;
 }
 
-export function buildGrammar(args: BuildGrammarArgs) {
+export function buildGrammar(
+	args: BuildGrammarArgs,
+): ListrTask<BuildGrammarContext>[] {
 	const p = paths();
 
-	return new Listr<BuildGrammarContext>([
+	return [
 		{
 			async task(ctx) {
-				ctx.index = await buildGrammarIndex(p.langsRoots);
+				ctx.index = args.index ?? (await buildGrammarIndex(p.langsRoots));
 
 				const currentEntry = ctx.index.get(args.lang);
 				if (!currentEntry) {
@@ -313,5 +315,5 @@ export function buildGrammar(args: BuildGrammarArgs) {
 				task.output = `staged ${allFiles.length} attribution file(s) from ${sourceDir}: ${detected}${notices.length > 0 ? ` (+${notices.length} NOTICE)` : ""}`;
 			},
 		},
-	]);
+	];
 }

@@ -13,4 +13,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLI_DIR="${REPO_ROOT}/cli"
 
-exec "node" "${CLI_DIR}/src/main.ts" "$@"
+if [[ ! -d "${CLI_DIR}/node_modules" ]]; then
+    echo "==> first-time setup (pnpm install)" >&2
+    (cd "${REPO_ROOT}" && pnpm install --silent)
+fi
+
+exec "node" --experimental-strip-types --disable-warning=ExperimentalWarning \
+    "${CLI_DIR}/src/index.ts" "$@"

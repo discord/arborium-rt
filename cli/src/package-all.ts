@@ -9,7 +9,7 @@ import { availableParallelism } from "node:os";
 import { join } from "node:path";
 
 import { buildGrammarIndex } from "./arborium-yaml.js";
-import { buildPackage } from "./build-package.js";
+import { buildPackage } from "./commands/build/package.ts";
 import { Logger, paths, runPool } from "./util.js";
 import { writeGrammarsIndexModule } from "./write-grammars-index.js";
 import { writeThirdPartyNotices } from "./write-third-party-notices.js";

@@ -13,8 +13,8 @@
 import { availableParallelism } from "node:os";
 
 import { buildGrammarIndex } from "./arborium-yaml.js";
-import { buildPackage } from "./build-package.js";
 import { buildGrammar } from "./commands/build/grammar.ts";
+import { buildPackage } from "./commands/build/package.ts";
 import { Logger, paths, runPool } from "./util.js";
 
 export interface BuildAllArgs {
