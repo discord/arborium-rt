@@ -4,6 +4,7 @@ import sade from "sade";
 import { bootstrap } from "./commands/bootstrap.ts";
 import { buildGrammar } from "./commands/build/grammar.ts";
 import { buildHost } from "./commands/build/host.ts";
+import { buildNode } from "./commands/build/node.ts";
 import { buildWasm } from "./commands/build/wasm.ts";
 
 const prog = sade("arborium-rt");
@@ -23,5 +24,12 @@ prog.command("build host").action(async () => {
 prog.command("build grammar <group> <lang>").action(async (group, lang) => {
 	await buildGrammar({ group, lang }).run();
 });
+
+prog
+	.command("build node")
+	.option("skip-grammars")
+	.action(async (options) => {
+		await buildNode(options).run();
+	});
 
 prog.parse(process.argv);
