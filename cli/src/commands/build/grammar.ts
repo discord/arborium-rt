@@ -110,7 +110,7 @@ export function buildGrammar(
 				//   - upstream layout: `def/common/` alongside `def/grammar/` (asciidoc)
 				//   - flattened layout: `def/grammar/common/` tucked inside (markdown)
 				// Stage both views so either pattern resolves.
-				const stagedGrammarJs = stageGrammarSource(
+				const stagedGrammarJs = await stageGrammarSource(
 					ctx.currentEntry.defPath,
 					ctx.buildDir,
 				);
@@ -139,7 +139,7 @@ export function buildGrammar(
 			async task(ctx, task) {
 				// Copy grammar-shipped headers + auxiliary C/C++ sources into src/ so
 				// scanner.c's `#include`s resolve during compile.
-				copySupportFiles(ctx.grammarDir, join(ctx.buildDir, "src"));
+				await copySupportFiles(ctx.grammarDir, join(ctx.buildDir, "src"));
 
 				await run(
 					task.stdout(),

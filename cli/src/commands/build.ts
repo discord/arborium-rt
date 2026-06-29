@@ -15,7 +15,7 @@ import { Listr, type ListrTask } from "listr2";
 import { buildGrammarIndex, type GrammarIndexEntry } from "../arborium-yaml.ts";
 import { buildGrammar } from "../commands/build/grammar.ts";
 import { paths } from "../util.ts";
-import { buildPackage } from "./build/package.ts";
+import { packageGrammar } from "./package/grammars.ts";
 
 export interface BuildAllArgs {
 	/** If set, only try these grammar ids (for debugging). */
@@ -120,7 +120,7 @@ function buildLang(
 				}
 
 				return task.newListr(
-					buildPackage({ group: entry.group, lang: id, index: ctx.index }),
+					packageGrammar({ group: entry.group, lang: id, index: ctx.index }),
 				);
 			},
 		},

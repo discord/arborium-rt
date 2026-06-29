@@ -29,7 +29,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "pretest": "../../scripts/arborium-rt package-all --only json && tsc && ../../scripts/arborium-rt stage",
+    "pretest": "../../scripts/arborium-rt package grammars json && tsc && ../../scripts/arborium-rt package host",
     "test": "vitest run"
   },
   "devDependencies": {

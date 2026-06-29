@@ -4,18 +4,11 @@
 // only stage source so `tree-sitter generate` can run and a scanner's
 // `#include`s resolve.
 
-import {
-	copyFileSync,
-	cpSync,
-	existsSync,
-	mkdirSync,
-	readdirSync,
-	symlinkSync,
-} from "node:fs";
-import { mkdir, symlink } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { copyFile, cp, mkdir, readdir, symlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { ListrTask } from "listr2";
-import type { GrammarIndexEntry } from "./arborium-yaml.js";
+import type { GrammarIndexEntry } from "./arborium-yaml.ts";
 
 /**
  * Symlink each transitively-required dep's def/grammar/ dir into
@@ -99,27 +92,30 @@ export function stageNpmDeps(
  * If both passes contribute a dir with the same name, the second pass
  * (nested → sibling) merges into the first via cpSync's default force.
  */
-export function stageGrammarSource(defDir: string, buildDir: string): string {
+export async function stageGrammarSource(
+	defDir: string,
+	buildDir: string,
+): Promise<string> {
 	const stageRoot = join(buildDir, "grammar-stage");
 	const stageGrammar = join(stageRoot, "grammar");
 	const grammarDir = join(defDir, "grammar");
 
 	// Full copy of the grammar dir into stage/grammar/.
-	cpSync(grammarDir, stageGrammar, { recursive: true });
+	await cp(grammarDir, stageGrammar, { recursive: true });
 
 	// Pass 1: def/'s non-grammar subdirs become siblings of stage/grammar/.
-	for (const entry of readdirSync(defDir, { withFileTypes: true })) {
+	for (const entry of await readdir(defDir, { withFileTypes: true })) {
 		if (!entry.isDirectory() || entry.name === "grammar") continue;
-		cpSync(join(defDir, entry.name), join(stageRoot, entry.name), {
+		await cp(join(defDir, entry.name), join(stageRoot, entry.name), {
 			recursive: true,
 		});
 	}
 
 	// Pass 2: def/grammar/'s own subdirs also become siblings, merging with
 	// whatever pass 1 already wrote under the same name.
-	for (const entry of readdirSync(grammarDir, { withFileTypes: true })) {
+	for (const entry of await readdir(grammarDir, { withFileTypes: true })) {
 		if (!entry.isDirectory()) continue;
-		cpSync(join(grammarDir, entry.name), join(stageRoot, entry.name), {
+		await cp(join(grammarDir, entry.name), join(stageRoot, entry.name), {
 			recursive: true,
 		});
 	}
@@ -138,17 +134,22 @@ export async function copySupportFiles(
 	src: string,
 	dst: string,
 ): Promise<void> {
-	if (!existsSync(src)) return;
-	for (const entry of readdirSync(src, { withFileTypes: true })) {
+	let entries: Dirent[];
+	try {
+		entries = await readdir(src, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
 		const full = join(src, entry.name);
 		if (entry.isDirectory()) {
-			copySupportFiles(full, join(dst, entry.name));
+			await copySupportFiles(full, join(dst, entry.name));
 			continue;
 		}
 		if (!entry.isFile()) continue;
 		if (entry.name === "parser.c") continue;
 		if (!/\.(h|hpp|c|cc|cpp)$/.test(entry.name)) continue;
-		mkdirSync(dst, { recursive: true });
-		copyFileSync(full, join(dst, entry.name));
+		await mkdir(dst, { recursive: true });
+		await copyFile(full, join(dst, entry.name));
 	}
 }

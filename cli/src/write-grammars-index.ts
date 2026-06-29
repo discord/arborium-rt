@@ -1,16 +1,16 @@
-// Generate packages/arborium-rt/src/grammars.ts — the single module that
+// Generate packages/arborium-rt-wasm/src/grammars.ts — the single module that
 // lists every bundled grammar's metadata (id, languageExport, asset URLs).
 // Compiled by tsc to dist/grammars.js, sibling to the dist/grammars/
-// subdir that `buildPackage` populates with per-language .wasm/.scm files,
+// subdir that `packageGrammar` populates with per-language .wasm/.scm files,
 // so the emitted `new URL('./grammars/<lang>/…', import.meta.url)`
 // references resolve directly.
 
-import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { buildGrammarIndex } from "./arborium-yaml.js";
-import { QUERY_TYPES, type QueryType } from "./flatten.js";
-import { normalizeCSymbol, paths } from "./util.js";
+import { buildGrammarIndex } from "./arborium-yaml.ts";
+import { QUERY_TYPES, type QueryType } from "./flatten.ts";
+import { normalizeCSymbol, paths } from "./util.ts";
 
 interface Entry {
 	readonly lang: string;
@@ -18,38 +18,61 @@ interface Entry {
 	readonly queries: ReadonlySet<QueryType>;
 }
 
-export function writeGrammarsIndexModule(): void {
-	const p = paths();
-	const index = buildGrammarIndex(p.langsRoots);
-	const entries = scanEntries(p.packagesOut, index);
+const isFile = (file: string): Promise<boolean> =>
+	stat(file).then(
+		(s) => s.isFile(),
+		() => false,
+	);
 
-	writeFileSync(
+const isDir = (dir: string): Promise<boolean> =>
+	stat(dir).then(
+		(s) => s.isDirectory(),
+		() => false,
+	);
+
+export async function writeGrammarsIndexModule(): Promise<void> {
+	const p = paths();
+	const index = await buildGrammarIndex(p.langsRoots);
+	const entries = await scanEntries(p.packagesOut, index);
+
+	await writeFile(
 		join(p.runtimePackageDir, "src", "grammars.ts"),
 		renderModule(entries),
 	);
 }
 
-function scanEntries(
+async function scanEntries(
 	packagesOut: string,
-	index: ReturnType<typeof buildGrammarIndex>,
-): Entry[] {
-	if (!existsSync(packagesOut)) return [];
-	const langs = readdirSync(packagesOut)
-		.filter((name) => statSync(join(packagesOut, name)).isDirectory())
-		.filter((name) =>
-			existsSync(join(packagesOut, name, `tree-sitter-${name}.wasm`)),
-		)
-		.sort();
+	index: Awaited<ReturnType<typeof buildGrammarIndex>>,
+): Promise<Entry[]> {
+	let names: string[];
+	try {
+		names = await readdir(packagesOut);
+	} catch {
+		return [];
+	}
 
-	return langs.map((lang) => {
-		const queries = new Set<QueryType>();
-		for (const qtype of QUERY_TYPES) {
-			if (existsSync(join(packagesOut, lang, `${qtype}.scm`)))
-				queries.add(qtype);
-		}
-		const cSymbol = normalizeCSymbol(index.get(lang)?.grammar.c_symbol, lang);
-		return { lang, languageExport: `tree_sitter_${cSymbol}`, queries };
-	});
+	const candidates = await Promise.all(
+		names.sort().map(async (name) => {
+			const ok =
+				(await isDir(join(packagesOut, name))) &&
+				(await isFile(join(packagesOut, name, `tree-sitter-${name}.wasm`)));
+			return ok ? name : null;
+		}),
+	);
+	const langs = candidates.filter((name): name is string => name !== null);
+
+	return Promise.all(
+		langs.map(async (lang) => {
+			const queries = new Set<QueryType>();
+			for (const qtype of QUERY_TYPES) {
+				if (await isFile(join(packagesOut, lang, `${qtype}.scm`)))
+					queries.add(qtype);
+			}
+			const cSymbol = normalizeCSymbol(index.get(lang)?.grammar.c_symbol, lang);
+			return { lang, languageExport: `tree_sitter_${cSymbol}`, queries };
+		}),
+	);
 }
 
 function renderModule(entries: readonly Entry[]): string {

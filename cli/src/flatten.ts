@@ -10,7 +10,7 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { GrammarIndexEntry } from "./arborium-yaml.js";
+import type { GrammarIndexEntry } from "./arborium-yaml.ts";
 
 export const QUERY_TYPES = ["highlights", "injections", "locals"] as const;
 export type QueryType = (typeof QUERY_TYPES)[number];

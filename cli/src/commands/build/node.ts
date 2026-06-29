@@ -200,7 +200,10 @@ function stageOne(
 		{
 			title: "generating parser.c (sparse-only)",
 			async task(ctx, task) {
-				const stagedGrammarJs = stageGrammarSource(ctx.defDir, ctx.buildDir);
+				const stagedGrammarJs = await stageGrammarSource(
+					ctx.defDir,
+					ctx.buildDir,
+				);
 				const nodeModules = join(ctx.buildDir, "node_modules");
 				const runEnv = { NODE_PATH: nodeModules };
 
