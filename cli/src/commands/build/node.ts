@@ -1,8 +1,10 @@
 // Build the statically-linked Node native addon.
 //
-// Stages the grammars (unless --skip-grammars), then drives `cargo build` for
-// the HOST triple via CARGO_BUILD_TARGET (which also lands the artifact under
-// the triple-prefixed target dir). No build-std: the host build links the
+// Split into a staging half (`build node` → tree-sitter generate per
+// grammar) and a packaging half (`package node` → `cargo build` + copy). The
+// cargo build targets the HOST triple via CARGO_BUILD_TARGET (which also lands
+// the artifact under the triple-prefixed target dir). No build-std: the host
+// build links the
 // prebuilt std, and `.cargo/config.toml` no longer pins build-std, so nothing
 // needs clearing — setting CARGO_UNSTABLE_BUILD_STD here would instead *enable*
 // build-std with an empty crate set and rebuild `core` (duplicate-lang-item
@@ -10,7 +12,16 @@
 // ARBORIUM_RT_NODE_GRAMMARS. Finally copies the produced cdylib to the npm
 // package as `arborium-rt-node.node`.
 
-import { copyFile, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import {
+	copyFile,
+	cp,
+	mkdir,
+	readdir,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { availableParallelism, totalmem } from "node:os";
 import { join } from "node:path";
 import { Listr, type ListrTask } from "listr2";
@@ -26,23 +37,33 @@ import {
 } from "../../lib/stage-grammar.ts";
 import { hostTriple, normalizeCSymbol, paths, run } from "../../lib/util.ts";
 
-export interface BuildNodeArgs extends BuildNodeGrammarsArgs {
-	/** Reuse an existing manifest instead of re-staging the grammars. */
-	skipGrammars?: boolean;
-}
-
-export function buildNode(args: BuildNodeArgs = {}) {
+/**
+ * Link the statically-linked addon from grammar sources already staged under
+ * `nodeGrammarsOut` (e.g. downloaded from the `grammars-node` matrix). Mirrors
+ * the wasm `package` subcommands: it assembles the publishable target artifact
+ * (here, `arborium-rt-node.node`) from already-built inputs. Regenerates the
+ * manifest by scanning the staged dirs, so it needs neither the tree-sitter CLI
+ * nor a manifest artifact.
+ */
+export function packageNode() {
 	const p = paths();
 
 	return new Listr([
 		{
-			title: "building node grammars",
-			skip: args.skipGrammars === true,
-			async task(_ctx, task) {
-				return task.newListr(buildNodeGrammars(args));
+			title: "regenerating manifest from staged grammars",
+			async task() {
+				await rebuildManifestFromStaged(p);
 			},
 		},
+		...linkAddonTasks(p),
+	]);
+}
+
+/** cargo build for the host triple + copy the cdylib into the npm package. */
+function linkAddonTasks(p: ReturnType<typeof paths>): ListrTask[] {
+	return [
 		{
+			title: "building arborium-rt-node",
 			async task(_ctx, task) {
 				const manifest = join(p.nodeGrammarsOut, "manifest.json");
 				const triple = hostTriple();
@@ -62,6 +83,7 @@ export function buildNode(args: BuildNodeArgs = {}) {
 			},
 		},
 		{
+			title: "copying addon into the npm package",
 			async task() {
 				const triple = hostTriple();
 				const ext = process.platform === "darwin" ? "dylib" : "so";
@@ -78,7 +100,7 @@ export function buildNode(args: BuildNodeArgs = {}) {
 				await copyFile(builtLib, dest);
 			},
 		},
-	]);
+	];
 }
 
 type ScannerKind = "none" | "c";
@@ -130,6 +152,8 @@ interface ManifestGrammar {
 export interface BuildNodeGrammarsArgs {
 	/** Restrict to these grammar ids (dev loop). */
 	only?: readonly string[];
+	/** Restrict to one arborium group (drives the per-group staging matrix). */
+	group?: string;
 }
 
 interface BuildNodeGrammarsContext {
@@ -162,6 +186,9 @@ export function buildNodeGrammars(
 				if (args.only && args.only.length > 0) {
 					const want = new Set(args.only);
 					ids = ids.filter((id) => want.has(id));
+				}
+				if (args.group) {
+					ids = ids.filter((id) => ctx.index.get(id)?.group === args.group);
 				}
 
 				await mkdir(p.nodeGrammarsOut, { recursive: true });
@@ -261,35 +288,101 @@ function stageOne(
 				await rm(srcOut, { recursive: true, force: true });
 				await cp(join(ctx.buildDir, "src"), srcOut, { recursive: true });
 
-				// List the external scanner in `sources` (when present) so build.rs
-				// compiles it; copySupportFiles already staged the file into src/.
-				// No arborium grammar ships a C++ scanner, so we only check scanner.c.
-				const sources = [join(id, "src", "parser.c")];
-				let scannerKind: ScannerKind = "none";
-				if (await isFile(join(grammarDir, "scanner.c"))) {
-					sources.push(join(id, "src", "scanner.c"));
-					scannerKind = "c";
-				}
-
 				// Flatten queries into langOut/.
 				flattenAllIntoDir(id, ctx.index, ctx.langOut);
-				const rel = async (name: string): Promise<string | null> =>
-					(await isFile(join(ctx.langOut, name))) ? join(id, name) : null;
 
 				// Drop the scratch build dir; the persistent src/ + .scm are all build.rs needs.
 				await rm(ctx.buildDir, { recursive: true, force: true });
 
-				ctx.built.push({
-					id,
-					cSymbol: ctx.cSymbol,
-					scannerKind,
-					dir: id,
-					sources,
-					highlights: await rel("highlights.scm"),
-					injections: await rel("injections.scm"),
-					locals: await rel("locals.scm"),
-				});
+				ctx.built.push(await manifestEntryFor(p, id, ctx.cSymbol));
 			},
 		},
 	];
+}
+
+/**
+ * Build one grammar's manifest entry purely from its staged dir on disk
+ * (`<nodeGrammarsOut>/<id>/`) — no generate, no access to the original def dir.
+ * Shared by {@link stageOne} (right after staging) and
+ * {@link rebuildManifestFromStaged} (link-only, from downloaded sources), so the
+ * manifest is always derived from the same source of truth: the staged files.
+ */
+async function manifestEntryFor(
+	p: ReturnType<typeof paths>,
+	id: string,
+	cSymbol: string,
+): Promise<ManifestGrammar> {
+	const langOut = join(p.nodeGrammarsOut, id);
+
+	// The external scanner (if any) was staged into src/ alongside parser.c.
+	// build.rs picks C vs C++ by file extension; no arborium grammar ships a C++
+	// scanner, so we only look for scanner.c.
+	const sources = [join(id, "src", "parser.c")];
+	let scannerKind: ScannerKind = "none";
+	if (await isFile(join(langOut, "src", "scanner.c"))) {
+		sources.push(join(id, "src", "scanner.c"));
+		scannerKind = "c";
+	}
+
+	const rel = async (name: string): Promise<string | null> =>
+		(await isFile(join(langOut, name))) ? join(id, name) : null;
+
+	return {
+		id,
+		cSymbol,
+		scannerKind,
+		dir: id,
+		sources,
+		highlights: await rel("highlights.scm"),
+		injections: await rel("injections.scm"),
+		locals: await rel("locals.scm"),
+	};
+}
+
+/**
+ * Rebuild `manifest.json` by scanning every staged grammar dir under
+ * `nodeGrammarsOut` (a dir is "staged" once it holds `src/parser.c`). Used by
+ * the link-only build (`package node`) so a runner that merely
+ * downloaded the staging matrix's sources can produce a complete, accurate
+ * manifest without the tree-sitter CLI or a manifest artifact.
+ */
+async function rebuildManifestFromStaged(
+	p: ReturnType<typeof paths>,
+): Promise<void> {
+	const index = await buildGrammarIndex(p.langsRoots);
+
+	let dirents: Dirent[];
+	try {
+		dirents = await readdir(p.nodeGrammarsOut, { withFileTypes: true });
+	} catch {
+		throw new Error(
+			`no staged grammars at ${p.nodeGrammarsOut}. run \`arborium-rt build node\` first (or download the grammars-node artifacts).`,
+		);
+	}
+
+	const built: ManifestGrammar[] = [];
+	for (const d of dirents) {
+		if (!d.isDirectory()) continue;
+		const id = d.name;
+		if (!(await isFile(join(p.nodeGrammarsOut, id, "src", "parser.c")))) continue;
+		const entry = index.get(id);
+		if (!entry) {
+			throw new Error(`staged grammar \`${id}\` is not in the corpus index`);
+		}
+		built.push(
+			await manifestEntryFor(p, id, normalizeCSymbol(entry.grammar.c_symbol, id)),
+		);
+	}
+
+	if (built.length === 0) {
+		throw new Error(
+			`no staged grammars found under ${p.nodeGrammarsOut}; nothing to build`,
+		);
+	}
+
+	built.sort((a, b) => a.id.localeCompare(b.id));
+	await writeFile(
+		join(p.nodeGrammarsOut, "manifest.json"),
+		`${JSON.stringify({ grammars: built }, null, 2)}\n`,
+	);
 }

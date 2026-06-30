@@ -22,8 +22,9 @@
 	],
 	"scripts": {
 		"build": "tsc",
-		"pretest": "../../scripts/arborium-rt build node json markdown markdown_inline html css javascript && tsc",
-		"test": "vitest run"
+		"pretest": "../../scripts/arborium-rt build node json markdown markdown_inline html css javascript && ../../scripts/arborium-rt package node && tsc",
+		"test": "vitest run",
+		"test:ci": "tsc && vitest run"
 	},
 	"devDependencies": {
 		"@types/node": "^25.6.0",

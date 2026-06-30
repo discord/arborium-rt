@@ -7,7 +7,7 @@ import sade from "sade";
 import { applyPatches, bootstrap } from "./commands/bootstrap.ts";
 import { buildGrammar } from "./commands/build/grammar.ts";
 import { buildHost } from "./commands/build/host.ts";
-import { buildNode } from "./commands/build/node.ts";
+import { buildNodeGrammars, packageNode } from "./commands/build/node.ts";
 import { buildWasm } from "./commands/build/wasm.ts";
 import { buildAll } from "./commands/build.ts";
 import { packageGrammars } from "./commands/package/grammars.ts";
@@ -87,16 +87,26 @@ prog.command("build grammar <group> <lang>").action(async (group, lang) => {
 
 prog
 	.command("build node")
-	.describe("build the statically-linked Node native addon (host triple)")
-	.option("--skip-grammars", "reuse an existing manifest instead of re-staging")
-	.example("build node                 # link every grammar")
-	.example("build node json markdown   # link only these grammars")
+	.describe("stage Node grammar sources (parser.c + scanner + queries); link with `package node`")
+	.option("--group", "only stage grammars in this arborium group")
+	.example("build node                    # stage every grammar")
+	.example("build node json markdown      # restrict to these grammars")
+	.example("build node --group group-acorn # one staging shard")
 	.action(async (opts) => {
 		const only = idsFilter(opts);
-		await buildNode({
-			...(only ? { only } : {}),
-			skipGrammars: opts["skip-grammars"] === true,
-		}).run();
+		await new Listr(
+			buildNodeGrammars({
+				...(only ? { only } : {}),
+				...(opts.group ? { group: String(opts.group) } : {}),
+			}),
+		).run();
+	});
+
+prog
+	.command("package node")
+	.describe("link the Node addon from already-staged grammar sources")
+	.action(async () => {
+		await packageNode().run();
 	});
 
 prog

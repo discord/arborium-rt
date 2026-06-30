@@ -238,7 +238,8 @@ cd arborium-rt
 ./scripts/arborium-rt build wasm    # arborium_rt_wasm.wasm (SIDE_MODULE)
 ./scripts/arborium-rt build host    # web-tree-sitter.{wasm,mjs}
 ./scripts/arborium-rt build         # build all grammars (browser)
-./scripts/arborium-rt build node    # statically-linked Node addon (all grammars)
+./scripts/arborium-rt build node    # stage Node addon grammar sources
+./scripts/arborium-rt package node  # link the statically-linked Node addon
 pnpm install && pnpm -r build && pnpm -r test
 ```
 

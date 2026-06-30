@@ -35,7 +35,8 @@ A second publishable package targets Node.js:
   dynamic grammar loading. At first use it registers all grammars into the
   shared `arborium-rt` registry and exposes the same highlight pipeline
   (`highlightToSpans`/`highlightToHtml`/`Session`). Built by
-  `./scripts/arborium-rt build node`; see "Node native addon target" below.
+  `./scripts/arborium-rt build node` + `package node`; see "Node native addon
+  target" below.
 
 One unpublished workspace package supports development:
 
@@ -71,12 +72,13 @@ tsx — `pnpm install` on first invocation, then forwards every call. Run
 # --group restricts to one arborium group).
 ./scripts/arborium-rt build [json css]
 
-# Build the statically-linked Node native addon for the HOST triple: stages
-# every grammar (parser.c + flattened queries + manifest), then links them in.
-# Needs the patched tree-sitter CLI (bootstrap) + a C/C++ compiler, NOT emcc.
-# Pass grammar ids for a fast dev loop; bare `build node` links all ~100
-# grammars (~80 MB .node). `--skip-grammars` reuses an existing manifest.
-./scripts/arborium-rt build node [json markdown html css javascript]
+# Build the statically-linked Node native addon for the HOST triple in two
+# steps. `build node` stages every grammar (parser.c + flattened queries +
+# manifest) — needs the patched tree-sitter CLI (bootstrap), NOT emcc. `package
+# node` then links them into one ~80 MB .node — needs a C/C++ compiler, NOT the
+# tree-sitter CLI. Pass grammar ids to `build node` to restrict the set.
+./scripts/arborium-rt build node [json markdown html css javascript]   # stage
+./scripts/arborium-rt package node                                     # link
 
 # Build + test the TypeScript packages. The arborium-rt-wasm `pretest` hook
 # runs `package grammars json` (grammar subdirs) and `package host` (host +
@@ -177,8 +179,8 @@ its own; it calls the same `arborium_rt::registry` / `arborium_rt::highlight`
 functions the wasm shim does, but every grammar is **statically linked** in
 rather than loaded dynamically.
 
-- **`lib/node/build.rs`** reads the manifest written by `build node`'s
-  grammar-staging step (path via `ARBORIUM_RT_NODE_GRAMMARS`,
+- **`lib/node/build.rs`** reads the manifest `package node` regenerates from
+  the staged grammar dirs (path via `ARBORIUM_RT_NODE_GRAMMARS`,
   default `<repo>/target/node-grammars/manifest.json`). For each grammar it
   `cc`-compiles `parser.c` + the one scanner (`.c` → C11, `.cc`/`.cpp` →
   C++17 `-fno-exceptions -fno-rtti`) in its **own** `cc::Build` so each
@@ -323,7 +325,7 @@ normally produced by `cargo xtask gen`; arborium-theme's `theme.rs`
 ships an empty `pub fn all() -> Vec::new()` since no themes are
 bundled), and builds the patched tree-sitter CLI with an explicit
 `CARGO_BUILD_TARGET=<host>` (a host-native CLI binary, independent of
-whichever target a later `build wasm`/`build node` selects). Re-run
+whichever target a later `build wasm`/`package node` selects). Re-run
 bootstrap after bumping either submodule or tweaking a patch.
 
 ### Target layout
@@ -344,11 +346,11 @@ bootstrap after bumping either submodule or tweaking a patch.
   consumers as `import { GRAMMARS } from '@discord/arborium-rt'`.
 - `target/node-grammars/<lang>/` — per-grammar staging for the Node addon:
   `src/parser.c` + `src/tree_sitter/*.h` + optional scanner + flattened
-  `.scm`, written by `build node`'s grammar-staging step.
+  `.scm`, written by `build node`.
   `target/node-grammars/manifest.json` is the index `lib/node/build.rs` consumes.
 - `target/<hostTriple>/release/libarborium_rt_node.{dylib,so}` — the native
   addon, copied to `packages/arborium-rt-node/arborium-rt-node.node` by
-  `build node`.
+  `package node`.
 
 ### Verifying a runtime build
 
@@ -404,7 +406,7 @@ means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
       `wasm32-unknown-emscripten` with `CARGO_BUILD_TARGET` +
       `CARGO_UNSTABLE_BUILD_STD=std,panic_abort` (the `SIDE_MODULE`/
       `EXPORTED_FUNCTIONS` link-args come from `.cargo/config.toml`). Needs emcc.
-    - `arborium-rt build node` → `arborium-rt-node` for the host triple with
+    - `arborium-rt package node` → `arborium-rt-node` for the host triple with
       `CARGO_BUILD_TARGET=<host>` (no build-std; the host links prebuilt std).
   Never add `lib/wasm`/`lib/node` back to `default-members`: a default build
   would then try to compile a shim for the wrong target.
@@ -435,5 +437,5 @@ means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
   partially-modified — reset with `git -C third_party/arborium reset
   --hard && git -C third_party/arborium clean -fd`, fix the offending
   `patches/*.patch` file, and re-run. Then rebuild the affected targets
-  (`./scripts/arborium-rt build wasm` and/or `build node`) to confirm they
+  (`./scripts/arborium-rt build wasm` and/or `package node`) to confirm they
   still link, and commit both the submodule bump and any patch updates together.
