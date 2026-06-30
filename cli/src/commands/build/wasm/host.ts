@@ -9,7 +9,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Listr } from "listr2";
-import { paths, run } from "../../lib/util.ts";
+import { paths, run } from "../../../lib/util.ts";
 
 /**
  * Plain tree-sitter C symbols arborium-rt's runtime imports that aren't in
@@ -102,7 +102,7 @@ const EXPORTED_RUNTIME_METHODS = [
 	"LE_HEAP_STORE_I64",
 ];
 
-export function buildHost() {
+export function buildWasmHost() {
 	const p = paths();
 
 	return new Listr([

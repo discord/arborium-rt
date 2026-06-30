@@ -1,4 +1,4 @@
-// The `package grammars` command for the browser runtime
+// The `package wasm grammars` command for the browser runtime
 // (`@discord/arborium-rt-wasm`):
 //
 //   packageGrammar   stage one built grammar's assets into dist/grammars/<lang>/
@@ -8,8 +8,8 @@
 // `packageGrammar` is the per-grammar primitive — it copies a grammar's
 // tree-sitter-<lang>.wasm + flattened `.scm` + attribution files into the
 // runtime package's dist/, and nothing else. The whole-corpus index
-// regeneration is deliberately kept out of it so `package grammars` can run
-// it exactly once at the end instead of racing it per grammar.
+// regeneration is deliberately kept out of it so `package wasm grammars` can
+// run it exactly once at the end instead of racing it per grammar.
 //
 // THIRD_PARTY_NOTICES generation is intentionally NOT part of this command —
 // it clones every upstream over the network, which is slow and unrelated to
@@ -24,11 +24,11 @@ import { Listr, type ListrTask } from "listr2";
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,
-} from "../../lib/arborium-yaml.ts";
-import { QUERY_TYPES, type QueryType } from "../../lib/flatten.ts";
-import { detectLicenses, findNoticeFiles } from "../../lib/grammar-clone.ts";
-import { paths } from "../../lib/util.ts";
-import { writeGrammarsIndexModule } from "../../lib/write-grammars-index.ts";
+} from "../../../lib/arborium-yaml.ts";
+import { QUERY_TYPES, type QueryType } from "../../../lib/flatten.ts";
+import { detectLicenses, findNoticeFiles } from "../../../lib/grammar-clone.ts";
+import { paths } from "../../../lib/util.ts";
+import { writeGrammarsIndexModule } from "../../../lib/write-grammars-index.ts";
 
 export interface PackageGrammarArgs {
 	group: string;
@@ -64,7 +64,7 @@ export function packageGrammar(args: PackageGrammarArgs): ListrTask[] {
 				].sort();
 				if (attributionFiles.length === 0) {
 					throw new Error(
-						`no LICENSE/NOTICE files in ${grammarDir}. run \`arborium-rt build-grammar ${args.group} ${args.lang}\` first to fetch the upstream attribution.`,
+						`no LICENSE/NOTICE files in ${grammarDir}. run \`arborium-rt build wasm grammar ${args.group} ${args.lang}\` first to fetch the upstream attribution.`,
 					);
 				}
 
@@ -121,7 +121,7 @@ export function packageGrammars(args: PackageGrammarsArgs = {}) {
 						dirents = await readdir(p.grammarsOut, { withFileTypes: true });
 					} catch {
 						throw new Error(
-							`no grammar build artifacts at ${p.grammarsOut}. run \`arborium-rt build\` first.`,
+							`no grammar build artifacts at ${p.grammarsOut}. run \`arborium-rt build wasm grammars\` first.`,
 						);
 					}
 					ctx.index = await buildGrammarIndex(p.langsRoots);

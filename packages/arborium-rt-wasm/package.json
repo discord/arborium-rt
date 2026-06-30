@@ -29,7 +29,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "pretest": "../../scripts/arborium-rt package grammars json && tsc && ../../scripts/arborium-rt package host",
+    "pretest": "../../scripts/arborium-rt package wasm grammars json && tsc && ../../scripts/arborium-rt package wasm host",
     "test": "vitest run"
   },
   "devDependencies": {

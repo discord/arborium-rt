@@ -1,13 +1,13 @@
-// The `package host` command: stage the built host + runtime wasms into the
-// runtime package's dist/ so `npm pack` / `npm publish` include them alongside
-// the compiled TypeScript. Copies the runtime wasm + host wasm/mjs into
-// `dist/runtime/` and `dist/host/` respectively. Source maps are left behind
-// to keep the tarball tight.
+// The `package wasm host` command: stage the built host + runtime wasms into
+// the runtime package's dist/ so `npm pack` / `npm publish` include them
+// alongside the compiled TypeScript. Copies the runtime wasm + host wasm/mjs
+// into `dist/runtime/` and `dist/host/` respectively. Source maps are left
+// behind to keep the tarball tight.
 
 import { copyFile, mkdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { Listr } from "listr2";
-import { paths } from "../../lib/util.ts";
+import { paths } from "../../../lib/util.ts";
 
 const exists = (file: string): Promise<boolean> =>
 	stat(file).then(
@@ -15,7 +15,7 @@ const exists = (file: string): Promise<boolean> =>
 		() => false,
 	);
 
-export function packageHost() {
+export function packageWasmHost() {
 	return new Listr([
 		{
 			title: "staging host + runtime wasms into dist/",
@@ -27,12 +27,12 @@ export function packageHost() {
 
 				if (!(await exists(hostWasm)) || !(await exists(hostMjs))) {
 					throw new Error(
-						`host wasm not found in ${hostSrcDir}. run \`arborium-rt build host\` first.`,
+						`host wasm not found in ${hostSrcDir}. run \`arborium-rt build wasm host\` first.`,
 					);
 				}
 				if (!(await exists(p.runtimeWasm))) {
 					throw new Error(
-						`runtime wasm not found at ${p.runtimeWasm}. run \`arborium-rt build wasm\` first.`,
+						`runtime wasm not found at ${p.runtimeWasm}. run \`arborium-rt build wasm runtime\` first.`,
 					);
 				}
 

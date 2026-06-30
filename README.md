@@ -235,11 +235,11 @@ TL;DR:
 git clone --recurse-submodules <this-repo>
 cd arborium-rt
 ./scripts/arborium-rt bootstrap     # apply patches + render Cargo manifests
-./scripts/arborium-rt build wasm    # arborium_rt_wasm.wasm (SIDE_MODULE)
-./scripts/arborium-rt build host    # web-tree-sitter.{wasm,mjs}
-./scripts/arborium-rt build         # build all grammars (browser)
-./scripts/arborium-rt build node    # stage Node addon grammar sources
-./scripts/arborium-rt package node  # link the statically-linked Node addon
+./scripts/arborium-rt build wasm runtime   # arborium_rt_wasm.wasm (SIDE_MODULE)
+./scripts/arborium-rt build wasm host      # web-tree-sitter.{wasm,mjs}
+./scripts/arborium-rt build wasm grammars  # build all grammars (browser)
+./scripts/arborium-rt build node grammars  # stage Node addon grammar sources
+./scripts/arborium-rt build node           # link the statically-linked Node addon
 pnpm install && pnpm -r build && pnpm -r test
 ```
 

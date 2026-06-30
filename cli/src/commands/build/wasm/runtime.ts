@@ -1,7 +1,7 @@
 import { Listr } from "listr2";
-import { paths, run } from "../../lib/util.ts";
+import { paths, run } from "../../../lib/util.ts";
 
-export function buildWasm() {
+export function buildWasmRuntime() {
 	const p = paths();
 
 	return new Listr([

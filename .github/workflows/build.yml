@@ -129,7 +129,7 @@ jobs:
         run: ./scripts/arborium-rt apply-patches
 
       - name: Build runtime SIDE_MODULE
-        run: ./scripts/arborium-rt build wasm
+        run: ./scripts/arborium-rt build wasm runtime
 
       - name: Upload runtime wasm
         uses: actions/upload-artifact@v7
@@ -174,7 +174,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build web-tree-sitter host (MAIN_MODULE)
-        run: ./scripts/arborium-rt build host
+        run: ./scripts/arborium-rt build wasm host
 
       - name: Upload host wasm
         uses: actions/upload-artifact@v7
@@ -190,8 +190,8 @@ jobs:
   # Per-arborium-group fan-out. Each job builds every grammar in its group to
   # wasm and uploads target/grammars/<lang>/ for the package job to merge.
   # Needs emcc + the patched tree-sitter CLI (from `tree-sitter-cli`) + askalono
-  # (fetch-license). No Rust toolchain — `build` compiles parser.c with emcc and
-  # flattens queries; it never invokes cargo.
+  # (fetch-license). No Rust toolchain — `build wasm grammars` compiles parser.c
+  # with emcc and flattens queries; it never invokes cargo.
   grammars-wasm:
     needs: tree-sitter-cli
     runs-on: ubuntu-latest
@@ -235,7 +235,7 @@ jobs:
       - name: Make tree-sitter executable
         run: chmod +x ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
 
-      # Required by `build` for the upstream LICENSE/NOTICE fetch step —
+      # Required by `build wasm grammars` for the upstream LICENSE/NOTICE fetch step —
       # fetch-license shells out to `askalono crawl` to identify license files
       # in each grammar's shallow clone.
       - name: Install askalono CLI
@@ -255,7 +255,7 @@ jobs:
         run: ./scripts/arborium-rt apply-patches
 
       - name: Build grammars in ${{ matrix.group }}
-        run: ./scripts/arborium-rt build --group ${{ matrix.group }}
+        run: ./scripts/arborium-rt build wasm grammars --group ${{ matrix.group }}
 
       # Each grammar's intermediate `build/` (parser.o, scanner.o, staged
       # node_modules) lives under target/grammars/<lang>/build/ and balloons the
@@ -271,7 +271,7 @@ jobs:
           retention-days: 7
 
   # ── Node grammar staging (per-group fan-out, platform-independent) ────────
-  # `build node` → parser.c + scanner + flattened queries for each
+  # `build node grammars` → parser.c + scanner + flattened queries for each
   # grammar. The output is plain source, identical for every target platform, so
   # it's staged ONCE here and reused by every per-platform link job below.
   # Sharded per arborium group (like grammars-wasm) so the heavy generates spread
@@ -315,7 +315,7 @@ jobs:
         run: ./scripts/arborium-rt apply-patches
 
       - name: Stage grammars in ${{ matrix.group }}
-        run: ./scripts/arborium-rt build node --group ${{ matrix.group }}
+        run: ./scripts/arborium-rt build node grammars --group ${{ matrix.group }}
 
       # Upload the staged sources only. Each shard writes its own manifest.json
       # covering just this group; the link job regenerates a complete manifest by
@@ -333,7 +333,7 @@ jobs:
 
   # ── Node packaging: link the native addon (per-platform matrix) ───────────
   # Downloads the platform-independent staged sources from `grammars-node`,
-  # regenerates the manifest from them (`package node` — no tree-sitter CLI
+  # regenerates the manifest from them (`build node` — no tree-sitter CLI
   # needed), then statically links every grammar into one `.node` for this matrix
   # entry's target. Needs nightly Rust + a C/C++ compiler (preinstalled); NOT
   # emcc, NOT the tree-sitter CLI. Today this matrix has one entry (linux/x64);
@@ -382,7 +382,7 @@ jobs:
         run: ./scripts/arborium-rt apply-patches
 
       - name: Link Node native addon (${{ matrix.platform }})
-        run: ./scripts/arborium-rt package node
+        run: ./scripts/arborium-rt build node
 
       - name: Annotate addon size
         run: |
@@ -404,15 +404,15 @@ jobs:
           retention-days: 7
 
       # `test:ci` is `tsc && vitest run` — it tests the addon just linked above,
-      # WITHOUT the `pretest` re-stage (`build node …`) the default `test` runs.
-      # Re-staging would need the tree-sitter CLI, which this job (and non-linux
-      # runners) deliberately don't have.
+      # WITHOUT the `pretest` re-stage (`build node grammars …`) the default
+      # `test` runs. Re-staging would need the tree-sitter CLI, which this job
+      # (and non-linux runners) deliberately don't have.
       - name: Test Node addon package
         run: pnpm --filter @discord/arborium-rt-node run test:ci
 
   # ── Browser target: assemble + test + pack the npm package ────────────────
   # Aggregator: merge every group's grammar wasms, stage the host + runtime
-  # wasms, run `package grammars` to populate dist/grammars/ and regenerate
+  # wasms, run `package wasm grammars` to populate dist/grammars/ and regenerate
   # src/grammars.ts, then build, test, and pack the publishable tarball.
   # Depends only on the three browser jobs — NOT on the node addon. Pure
   # node/pnpm work; no Rust, no emcc. The tarball is uploaded so the publish
@@ -459,9 +459,9 @@ jobs:
           merge-multiple: true
 
       - name: Stage host + runtime wasms into dist/
-        run: ./scripts/arborium-rt package host
+        run: ./scripts/arborium-rt package wasm host
 
-      # Shared by both `package grammars` (per-grammar `askalono crawl` over each
+      # Shared by both `package wasm grammars` (per-grammar `askalono crawl` over each
       # already-downloaded grammar dir to identify its LICENSE/NOTICE files — a
       # fast local scan, no network) and the THIRD_PARTY_NOTICES step below.
       # Installed once; the action caches the built binary so warm runs are fast.
@@ -476,7 +476,7 @@ jobs:
       # is generated separately below — it's the only step that clones every
       # upstream over the network, so it doesn't gate the test run.
       - name: Package every grammar into dist/grammars/
-        run: ./scripts/arborium-rt package grammars
+        run: ./scripts/arborium-rt package wasm grammars
 
       - name: Annotate wasm sizes
         run: |
@@ -501,12 +501,13 @@ jobs:
 
       # Only the browser package here. The Node addon package is built + tested
       # in the package-node job (it needs Rust + staged grammar sources, which this
-      # job doesn't set up); its `pretest` runs `build node`, so it must not fire
-      # here. The CLI's own unit tests run alongside (no extra toolchain).
+      # job doesn't set up); its `pretest` runs `build node grammars` + `build
+      # node`, so it must not fire here. The CLI's own unit tests run alongside
+      # (no extra toolchain).
       - name: Run tests
         run: pnpm -r --filter='!@discord/arborium-rt-node' test
 
-      # Decoupled from `package grammars`: clones every upstream at its pinned
+      # Decoupled from `package wasm grammars`: clones every upstream at its pinned
       # commit and writes THIRD_PARTY_NOTICES into the runtime package's dist/
       # (and the repo root) so the packed tarball ships it. Runs after the tests
       # so the network-heavy clone pass doesn't delay test feedback, and before

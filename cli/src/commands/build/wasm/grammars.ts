@@ -1,5 +1,6 @@
 // Iterate every grammar in the arborium submodule, attempt
-// build-grammar + package, collect per-grammar results.
+// build-grammar + package, collect per-grammar results. Drives the browser
+// (wasm) grammar corpus: `build wasm grammars`.
 //
 // Grammars fail for a variety of reasons (tree-sitter-generate ABI mismatches,
 // missing upstream node_modules that aren't declared in arborium.yaml,
@@ -12,13 +13,13 @@
 
 import { availableParallelism } from "node:os";
 import { Listr, type ListrTask } from "listr2";
-import { buildGrammar } from "../commands/build/grammar.ts";
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,
-} from "../lib/arborium-yaml.ts";
-import { paths } from "../lib/util.ts";
-import { packageGrammar } from "./package/grammars.ts";
+} from "../../../lib/arborium-yaml.ts";
+import { paths } from "../../../lib/util.ts";
+import { packageGrammar } from "../../package/wasm/grammars.ts";
+import { buildGrammar } from "./grammar.ts";
 
 export interface BuildAllArgs {
 	/** If set, only try these grammar ids (for debugging). */
