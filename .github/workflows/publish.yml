@@ -38,6 +38,24 @@ jobs:
           name: ${{ needs.build.outputs.tarball-artifact }}
           path: .
 
+      # The per-platform native addons built by build.yml's package-node matrix.
+      # Each artifact preserves its npm/<platform>/ path, but the .node basenames
+      # already carry the platform (arborium-rt-node.<platformArchABI>.node), so
+      # we flatten them all into ./node-addons/ for flat release attachments.
+      # We attach only the raw .node binaries — not the full npm package.
+      - name: Download Node addons
+        uses: actions/download-artifact@v8
+        with:
+          pattern: node-addon-*
+          path: node-addons-raw
+          merge-multiple: true
+
+      - name: Flatten Node addons
+        run: |
+          mkdir -p node-addons
+          find node-addons-raw -name '*.node' -exec mv {} node-addons/ \;
+          ls -l node-addons
+
       - name: Resolve tag
         id: meta
         run: |
@@ -75,7 +93,9 @@ jobs:
 
           > dry-run: npm publish was skipped."
           fi
-          gh release create "$tag" "${{ needs.build.outputs.tarball-name }}" \
+          gh release create "$tag" \
+            "${{ needs.build.outputs.tarball-name }}" \
+            node-addons/*.node \
             --target "$GITHUB_SHA" \
             --title "$tag" \
             --notes "$notes"
