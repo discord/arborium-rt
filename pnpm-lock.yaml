@@ -57,6 +57,9 @@ importers:
       '@discord/arborium-rt-node-linux-x64-gnu':
         specifier: workspace:*
         version: link:npm/linux-x64-gnu
+      '@discord/arborium-rt-node-win32-x64-msvc':
+        specifier: workspace:*
+        version: link:npm/win32-x64-msvc
     devDependencies:
       '@napi-rs/cli':
         specifier: ^2
@@ -78,6 +81,8 @@ importers:
   packages/arborium-rt-node/npm/linux-arm64-gnu: {}
 
   packages/arborium-rt-node/npm/linux-x64-gnu: {}
+
+  packages/arborium-rt-node/npm/win32-x64-msvc: {}
 
   packages/arborium-rt-wasm:
     devDependencies:

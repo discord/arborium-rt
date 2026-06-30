@@ -1,0 +1,23 @@
+{
+  "name": "@discord/arborium-rt-node-win32-x64-msvc",
+  "version": "0.1.0",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "arborium-rt-node.win32-x64-msvc.node",
+  "files": [
+    "arborium-rt-node.win32-x64-msvc.node"
+  ],
+  "description": "Statically-linked tree-sitter + arborium runtime for Node.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/appellation/arborium-rt.git"
+  }
+}
