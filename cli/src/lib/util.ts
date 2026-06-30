@@ -166,6 +166,10 @@ export function hostTriple(): string {
 				: process.arch;
 	if (process.platform === "linux") return `${arch}-unknown-linux-gnu`;
 	if (process.platform === "darwin") return `${arch}-apple-darwin`;
+	// Windows only runs `build node` (+ apply-patches), which never touches the
+	// tree-sitter CLI — so this value isn't used to locate a binary there; it
+	// just has to be a valid triple so `paths()` construction doesn't throw.
+	if (process.platform === "win32") return `${arch}-pc-windows-msvc`;
 	throw new Error(
 		`unsupported host platform ${process.platform}/${process.arch}; set ARBORIUM_RT_HOST_TRIPLE`,
 	);
