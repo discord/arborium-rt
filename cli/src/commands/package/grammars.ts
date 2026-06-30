@@ -118,7 +118,7 @@ export function packageGrammars(args: PackageGrammarsArgs = {}) {
 						dirents = await readdir(p.grammarsOut, { withFileTypes: true });
 					} catch {
 						throw new Error(
-							`no grammar build artifacts at ${p.grammarsOut}. run \`arborium-rt build-all\` first.`,
+							`no grammar build artifacts at ${p.grammarsOut}. run \`arborium-rt build\` first.`,
 						);
 					}
 					ctx.index = await buildGrammarIndex(p.langsRoots);

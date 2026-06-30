@@ -27,12 +27,12 @@ export function packageHost() {
 
 				if (!(await exists(hostWasm)) || !(await exists(hostMjs))) {
 					throw new Error(
-						`host wasm not found in ${hostSrcDir}. run \`arborium-rt build-host\` first.`,
+						`host wasm not found in ${hostSrcDir}. run \`arborium-rt build host\` first.`,
 					);
 				}
 				if (!(await exists(p.runtimeWasm))) {
 					throw new Error(
-						`runtime wasm not found at ${p.runtimeWasm}. run \`arborium-rt build-wasm\` first.`,
+						`runtime wasm not found at ${p.runtimeWasm}. run \`arborium-rt build wasm\` first.`,
 					);
 				}
 

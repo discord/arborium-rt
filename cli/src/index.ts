@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Listr } from "listr2";
 import sade from "sade";
-import { bootstrap } from "./commands/bootstrap.ts";
+import { applyPatches, bootstrap } from "./commands/bootstrap.ts";
 import { buildGrammar } from "./commands/build/grammar.ts";
 import { buildHost } from "./commands/build/host.ts";
 import { buildNode } from "./commands/build/node.ts";
@@ -12,6 +12,7 @@ import { buildWasm } from "./commands/build/wasm.ts";
 import { buildAll } from "./commands/build.ts";
 import { packageGrammars } from "./commands/package/grammars.ts";
 import { packageHost } from "./commands/package/host.ts";
+import { buildGrammarIndex } from "./lib/arborium-yaml.ts";
 import { paths } from "./lib/util.ts";
 import { writeThirdPartyNotices } from "./lib/write-third-party-notices.ts";
 
@@ -27,9 +28,53 @@ prog.command("bootstrap").action(async () => {
 	await bootstrap().run();
 });
 
-prog.command("build").action(async () => {
-	await buildAll().run();
-});
+prog
+	.command("apply-patches")
+	.describe(
+		"reset submodules + apply patches + render Cargo.toml (no tree-sitter CLI build)",
+	)
+	.action(async () => {
+		await applyPatches().run();
+	});
+
+prog
+	.command("build")
+	.describe("build + package every grammar in the corpus (default: all)")
+	.option("--group", "only build grammars in this arborium group")
+	.option("--only", "comma-separated grammar ids to build")
+	.option("-j, --jobs", "max concurrent grammar builds")
+	.action(async (opts) => {
+		const only =
+			typeof opts.only === "string"
+				? opts.only
+						.split(",")
+						.map((s: string) => s.trim())
+						.filter(Boolean)
+				: undefined;
+		const jobs =
+			opts.jobs !== undefined ? Number.parseInt(String(opts.jobs), 10) : undefined;
+		await buildAll({
+			...(only && only.length > 0 ? { only } : {}),
+			...(opts.group ? { group: String(opts.group) } : {}),
+			...(jobs !== undefined && Number.isFinite(jobs) ? { jobs } : {}),
+		}).run();
+	});
+
+prog
+	.command("list-groups")
+	.describe("print arborium groups with at least one buildable grammar")
+	.option("--json", "emit the group list as a JSON array")
+	.action(async (opts) => {
+		const index = await buildGrammarIndex(paths().langsRoots);
+		const groups = [
+			...new Set([...index.values()].map((e) => e.group)),
+		].sort();
+		if (opts.json) {
+			process.stdout.write(`${JSON.stringify(groups)}\n`);
+		} else {
+			for (const g of groups) process.stdout.write(`${g}\n`);
+		}
+	});
 
 prog.command("build wasm").action(async () => {
 	await buildWasm().run();

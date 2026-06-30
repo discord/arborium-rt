@@ -76,10 +76,10 @@ jobs:
         run: ./scripts/arborium-rt bootstrap
 
       - name: Build runtime SIDE_MODULE
-        run: ./scripts/arborium-rt build-wasm
+        run: ./scripts/arborium-rt build wasm
 
       - name: Build web-tree-sitter host (MAIN_MODULE)
-        run: ./scripts/arborium-rt build-host
+        run: ./scripts/arborium-rt build host
 
       # Drives the grammars matrix below — only groups with at least one
       # buildable grammar (license-allowed, not in DISABLED_GRAMMARS).
@@ -184,7 +184,7 @@ jobs:
         run: ./scripts/arborium-rt apply-patches
 
       - name: Build grammars in ${{ matrix.group }}
-        run: ./scripts/arborium-rt build-all --group ${{ matrix.group }}
+        run: ./scripts/arborium-rt build --group ${{ matrix.group }}
 
       # Each grammar's intermediate `build/` (parser.o, scanner.o, staged
       # node_modules) lives under target/grammars/<lang>/build/ and balloons
@@ -245,7 +245,7 @@ jobs:
         run: ./scripts/arborium-rt apply-patches
 
       - name: Build Node native addon (all grammars)
-        run: ./scripts/arborium-rt build-node
+        run: ./scripts/arborium-rt build node
 
       - name: Annotate addon size
         run: |
