@@ -17,14 +17,14 @@ import { Listr, type ListrTask } from "listr2";
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,
-} from "../../arborium-yaml.ts";
-import { flattenAllIntoDir } from "../../flatten.ts";
+} from "../../lib/arborium-yaml.ts";
+import { flattenAllIntoDir } from "../../lib/flatten.ts";
 import {
 	copySupportFiles,
 	stageGrammarSource,
 	stageNpmDeps,
-} from "../../stage-grammar.ts";
-import { hostTriple, normalizeCSymbol, paths, run } from "../../util.ts";
+} from "../../lib/stage-grammar.ts";
+import { hostTriple, normalizeCSymbol, paths, run } from "../../lib/util.ts";
 
 export interface BuildNodeArgs extends BuildNodeGrammarsArgs {
 	/** Reuse an existing manifest instead of re-staging the grammars. */

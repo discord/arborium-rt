@@ -8,21 +8,21 @@ import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,
 	resolveCommit,
-} from "../../arborium-yaml.ts";
-import { flattenAllIntoDir } from "../../flatten.ts";
+} from "../../lib/arborium-yaml.ts";
+import { flattenAllIntoDir } from "../../lib/flatten.ts";
 import {
 	cloneDirFor,
 	detectLicenses,
 	ensureClone,
 	findNoticeFiles,
 	isLocalGrammar,
-} from "../../grammar-clone.ts";
+} from "../../lib/grammar-clone.ts";
 import {
 	copySupportFiles,
 	stageGrammarSource,
 	stageNpmDeps,
-} from "../../stage-grammar.ts";
-import { normalizeCSymbol, paths, run } from "../../util.ts";
+} from "../../lib/stage-grammar.ts";
+import { normalizeCSymbol, paths, run } from "../../lib/util.ts";
 
 export interface BuildGrammarArgs {
 	group: string;

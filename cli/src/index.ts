@@ -12,8 +12,8 @@ import { buildWasm } from "./commands/build/wasm.ts";
 import { buildAll } from "./commands/build.ts";
 import { packageGrammars } from "./commands/package/grammars.ts";
 import { packageHost } from "./commands/package/host.ts";
-import { paths } from "./util.ts";
-import { writeThirdPartyNotices } from "./write-third-party-notices.ts";
+import { paths } from "./lib/util.ts";
+import { writeThirdPartyNotices } from "./lib/write-third-party-notices.ts";
 
 function cliVersion(): string {
 	const pkgPath = join(paths().cliPackageDir, "package.json");
@@ -69,7 +69,9 @@ prog
 
 prog
 	.command("notices")
-	.describe("regenerate THIRD_PARTY_NOTICES from each grammar's upstream license")
+	.describe(
+		"regenerate THIRD_PARTY_NOTICES from each grammar's upstream license",
+	)
 	.action(async () => {
 		await new Listr(writeThirdPartyNotices()).run();
 	});

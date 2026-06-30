@@ -30,7 +30,6 @@ import type { Writable } from "node:stream";
 
 import type { ListrTask } from "listr2";
 import spdxSatisfies from "spdx-satisfies";
-
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,

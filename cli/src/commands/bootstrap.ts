@@ -11,7 +11,7 @@
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { Listr, type ListrTask } from "listr2";
-import { hostTriple, paths, run } from "../util.ts";
+import { hostTriple, paths, run } from "../lib/util.ts";
 
 /** Local version string rendered into each `Cargo.toml` from its template. */
 const RENDER_VERSION = "0.0.0-arborium-rt";

@@ -20,12 +20,12 @@ import { Listr, type ListrTask } from "listr2";
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,
-} from "../../arborium-yaml.ts";
-import { QUERY_TYPES, type QueryType } from "../../flatten.ts";
-import { detectLicenses, findNoticeFiles } from "../../grammar-clone.ts";
-import { paths } from "../../util.ts";
-import { writeGrammarsIndexModule } from "../../write-grammars-index.ts";
-import { writeThirdPartyNotices } from "../../write-third-party-notices.ts";
+} from "../../lib/arborium-yaml.ts";
+import { QUERY_TYPES, type QueryType } from "../../lib/flatten.ts";
+import { detectLicenses, findNoticeFiles } from "../../lib/grammar-clone.ts";
+import { paths } from "../../lib/util.ts";
+import { writeGrammarsIndexModule } from "../../lib/write-grammars-index.ts";
+import { writeThirdPartyNotices } from "../../lib/write-third-party-notices.ts";
 
 export interface PackageGrammarArgs {
 	group: string;

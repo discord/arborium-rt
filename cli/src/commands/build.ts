@@ -12,9 +12,12 @@
 
 import { availableParallelism } from "node:os";
 import { Listr, type ListrTask } from "listr2";
-import { buildGrammarIndex, type GrammarIndexEntry } from "../arborium-yaml.ts";
 import { buildGrammar } from "../commands/build/grammar.ts";
-import { paths } from "../util.ts";
+import {
+	buildGrammarIndex,
+	type GrammarIndexEntry,
+} from "../lib/arborium-yaml.ts";
+import { paths } from "../lib/util.ts";
 import { packageGrammar } from "./package/grammars.ts";
 
 export interface BuildAllArgs {

@@ -7,7 +7,7 @@
 import { copyFile, mkdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { Listr } from "listr2";
-import { paths } from "../../util.ts";
+import { paths } from "../../lib/util.ts";
 
 const exists = (file: string): Promise<boolean> =>
 	stat(file).then(

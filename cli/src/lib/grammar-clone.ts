@@ -7,8 +7,8 @@
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Writable } from "node:stream";
-import type { GrammarIndexEntry } from "./arborium-yaml.ts";
 import { paths, run, runCapture } from "./util.ts";
+import type { GrammarIndexEntry } from "./arborium-yaml.ts";
 
 /** Reject any askalono detection below this score as "not actually known". */
 export const MIN_SCORE = 0.8;

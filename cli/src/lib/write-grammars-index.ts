@@ -7,7 +7,6 @@
 
 import { readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-
 import { buildGrammarIndex } from "./arborium-yaml.ts";
 import { QUERY_TYPES, type QueryType } from "./flatten.ts";
 import { normalizeCSymbol, paths } from "./util.ts";

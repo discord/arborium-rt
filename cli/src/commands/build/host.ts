@@ -9,7 +9,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Listr } from "listr2";
-import { paths, run } from "../../util.ts";
+import { paths, run } from "../../lib/util.ts";
 
 /**
  * Plain tree-sitter C symbols arborium-rt's runtime imports that aren't in

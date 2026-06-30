@@ -1,5 +1,5 @@
 import { Listr } from "listr2";
-import { paths, run } from "../../util.ts";
+import { paths, run } from "../../lib/util.ts";
 
 export function buildWasm() {
 	const p = paths();
