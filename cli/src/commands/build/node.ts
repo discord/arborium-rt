@@ -11,7 +11,7 @@
 // package as `arborium-rt-node.node`.
 
 import { copyFile, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
-import { availableParallelism } from "node:os";
+import { availableParallelism, totalmem } from "node:os";
 import { join } from "node:path";
 import { Listr, type ListrTask } from "listr2";
 import {
@@ -89,6 +89,23 @@ async function isFile(path: string): Promise<boolean> {
 		.catch(() => false);
 }
 
+/**
+ * Concurrency for grammar staging, bounded by BOTH cpu and memory.
+ *
+ * `tree-sitter generate` for the largest grammars (verilog, typescript, lean,
+ * cobol, …) can each spike to several GB while it builds the full parse table.
+ * Unlike the wasm build — which is sharded one arborium group per runner, so big
+ * grammars rarely coincide — the node addon stages the whole corpus on a single
+ * runner, so a cluster of big grammars generating at once will OOM-kill the
+ * runner (it dies with SIGTERM / exit 143 mid-staging). Reserve ~6 GiB of
+ * headroom per concurrent generate so memory, not just cpu count, caps the pool.
+ */
+function stagingConcurrency(): number {
+	const perJobBytes = 6 * 1024 ** 3;
+	const byMemory = Math.max(1, Math.floor(totalmem() / perJobBytes));
+	return Math.max(1, Math.min(availableParallelism(), byMemory));
+}
+
 /** One grammar's entry in the manifest `lib/node/build.rs` reads. */
 interface ManifestGrammar {
 	/** arborium grammar id (the language name used for injection lookups). */
@@ -156,7 +173,7 @@ export function buildNodeGrammars(
 							// `concurrent: false` is load-bearing: listr2 merges the
 							// parent list's options into every nested list, so without
 							// this override the per-grammar steps inherit the outer
-							// `concurrent: availableParallelism()` and run in parallel.
+							// `concurrent: stagingConcurrency()` and run in parallel.
 							// They are strictly ordered (mkdir/stage → generate →
 							// copy/manifest), so the copy step would otherwise race the
 							// generate step and ENOENT on `build/src`.
@@ -172,7 +189,7 @@ export function buildNodeGrammars(
 							});
 						},
 					})),
-					{ concurrent: availableParallelism() },
+					{ concurrent: stagingConcurrency() },
 				);
 			},
 		},
