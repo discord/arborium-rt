@@ -7,8 +7,8 @@
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Writable } from "node:stream";
-import { paths, run, runCapture } from "./util.ts";
 import type { GrammarIndexEntry } from "./arborium-yaml.ts";
+import { paths, run, runCapture } from "./util.ts";
 
 /** Reject any askalono detection below this score as "not actually known". */
 export const MIN_SCORE = 0.8;
@@ -96,6 +96,12 @@ function upgradeSpdx(spdx: string, text: string): string {
 	return spdx;
 }
 
+async function isDir(path: string): Promise<boolean> {
+	return stat(path)
+		.then((s) => s.isDirectory())
+		.catch(() => false);
+}
+
 /**
  * Ensure `cloneDir` contains a checkout of `repo` at `commit`. Idempotent:
  * if the directory already has the right commit checked out, returns
@@ -112,7 +118,7 @@ export async function ensureClone(
 	repo: string,
 	commit: string | undefined,
 ): Promise<void> {
-	if (commit && (await stat(join(cloneDir, ".git"))).isDirectory()) {
+	if (commit && (await isDir(join(cloneDir, ".git")))) {
 		try {
 			const head = (
 				await runCapture(output, "git", ["-C", cloneDir, "rev-parse", "HEAD"])

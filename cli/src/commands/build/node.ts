@@ -38,8 +38,8 @@ export function buildNode(args: BuildNodeArgs = {}) {
 		{
 			title: "building node grammars",
 			skip: args.skipGrammars === true,
-			async task() {
-				return buildNodeGrammars(args);
+			async task(_ctx, task) {
+				return task.newListr(buildNodeGrammars(args));
 			},
 		},
 		{
@@ -82,6 +82,12 @@ export function buildNode(args: BuildNodeArgs = {}) {
 }
 
 type ScannerKind = "none" | "c";
+
+async function isFile(path: string): Promise<boolean> {
+	return stat(path)
+		.then((s) => s.isFile())
+		.catch(() => false);
+}
 
 /** One grammar's entry in the manifest `lib/node/build.rs` reads. */
 interface ManifestGrammar {
@@ -147,6 +153,13 @@ export function buildNodeGrammars(
 					ids.map((id) => ({
 						title: `staging grammar ${id}`,
 						async task(ctx, task) {
+							// `concurrent: false` is load-bearing: listr2 merges the
+							// parent list's options into every nested list, so without
+							// this override the per-grammar steps inherit the outer
+							// `concurrent: availableParallelism()` and run in parallel.
+							// They are strictly ordered (mkdir/stage → generate →
+							// copy/manifest), so the copy step would otherwise race the
+							// generate step and ENOENT on `build/src`.
 							return task.newListr(stageOne(p, id), {
 								ctx: {
 									...ctx,
@@ -155,6 +168,7 @@ export function buildNodeGrammars(
 									langOut: "",
 									cSymbol: "",
 								},
+								concurrent: false,
 							});
 						},
 					})),
@@ -220,29 +234,30 @@ function stageOne(
 		{
 			async task(ctx) {
 				const grammarDir = join(ctx.defDir, "grammar");
-				const scannerSrc = join(grammarDir, "scanner.c");
 
 				// Copy grammar-shipped headers + aux C/C++ into src/ so scanner #includes
 				// resolve. Then snapshot the whole generated src/ (parser.c +
-				// tree_sitter/*.h + support files) into the persistent staging dir.
+				// tree_sitter/*.h + support files, including any scanner) into the
+				// persistent staging dir.
 				await copySupportFiles(grammarDir, join(ctx.buildDir, "src"));
 				const srcOut = join(ctx.langOut, "src");
 				await rm(srcOut, { recursive: true, force: true });
 				await cp(join(ctx.buildDir, "src"), srcOut, { recursive: true });
 
+				// List the external scanner in `sources` (when present) so build.rs
+				// compiles it; copySupportFiles already staged the file into src/.
+				// No arborium grammar ships a C++ scanner, so we only check scanner.c.
 				const sources = [join(id, "src", "parser.c")];
-				if (scannerSrc) {
-					const base = "scanner.c";
-					await copyFile(scannerSrc, join(srcOut, base));
-					sources.push(join(id, "src", base));
+				let scannerKind: ScannerKind = "none";
+				if (await isFile(join(grammarDir, "scanner.c"))) {
+					sources.push(join(id, "src", "scanner.c"));
+					scannerKind = "c";
 				}
 
 				// Flatten queries into langOut/.
 				flattenAllIntoDir(id, ctx.index, ctx.langOut);
 				const rel = async (name: string): Promise<string | null> =>
-					(await stat(join(ctx.langOut, name))).isFile()
-						? join(id, name)
-						: null;
+					(await isFile(join(ctx.langOut, name))) ? join(id, name) : null;
 
 				// Drop the scratch build dir; the persistent src/ + .scm are all build.rs needs.
 				await rm(ctx.buildDir, { recursive: true, force: true });
@@ -250,7 +265,7 @@ function stageOne(
 				ctx.built.push({
 					id,
 					cSymbol: ctx.cSymbol,
-					scannerKind: scannerSrc ? "c" : "none",
+					scannerKind,
 					dir: id,
 					sources,
 					highlights: await rel("highlights.scm"),
