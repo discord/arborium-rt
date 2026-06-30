@@ -1,16 +1,20 @@
 // The `package grammars` command for the browser runtime
 // (`@discord/arborium-rt-wasm`):
 //
-//   packageGrammar         stage one built grammar's assets into dist/grammars/<lang>/
-//   packageGrammars        repackage every already-built grammar, then regenerate
-//   regenerateRuntimeIndex rewrite grammars.ts + THIRD_PARTY_NOTICES (shared post-step)
+//   packageGrammar   stage one built grammar's assets into dist/grammars/<lang>/
+//   packageGrammars  repackage every already-built grammar, then regenerate
+//                    the grammars.ts index
 //
 // `packageGrammar` is the per-grammar primitive — it copies a grammar's
 // tree-sitter-<lang>.wasm + flattened `.scm` + attribution files into the
-// runtime package's dist/, and nothing else. The whole-corpus regeneration
-// (`regenerateRuntimeIndex`) is deliberately kept out of it so `build` /
-// `package grammars` can run it exactly once at the end instead of racing it
-// per grammar.
+// runtime package's dist/, and nothing else. The whole-corpus index
+// regeneration is deliberately kept out of it so `package grammars` can run
+// it exactly once at the end instead of racing it per grammar.
+//
+// THIRD_PARTY_NOTICES generation is intentionally NOT part of this command —
+// it clones every upstream over the network, which is slow and unrelated to
+// staging the already-built assets. Run `arborium-rt notices` separately
+// (e.g. as its own CI step) when the published tarball needs it.
 
 import type { Dirent } from "node:fs";
 import { copyFile, mkdir, readdir, rm, stat } from "node:fs/promises";
@@ -25,7 +29,6 @@ import { QUERY_TYPES, type QueryType } from "../../lib/flatten.ts";
 import { detectLicenses, findNoticeFiles } from "../../lib/grammar-clone.ts";
 import { paths } from "../../lib/util.ts";
 import { writeGrammarsIndexModule } from "../../lib/write-grammars-index.ts";
-import { writeThirdPartyNotices } from "../../lib/write-third-party-notices.ts";
 
 export interface PackageGrammarArgs {
 	group: string;
@@ -172,31 +175,17 @@ export function packageGrammars(args: PackageGrammarsArgs = {}) {
 					);
 				},
 			},
-			...regenerateRuntimeIndex(),
+			{
+				// Rewrite the generated `grammars.ts` index from whatever per-grammar
+				// subdirs now exist under the runtime package's dist/. Run once, after
+				// every subdir is written — never per-grammar (the scan is whole-corpus
+				// and would race under parallel packaging).
+				title: "regenerating grammars.ts index",
+				async task() {
+					await writeGrammarsIndexModule();
+				},
+			},
 		],
 		{ concurrent: false },
 	);
-}
-
-// Post-packaging regeneration: rewrite the generated `grammars.ts` index from
-// whatever per-grammar subdirs now exist under the runtime package's dist/,
-// then regenerate THIRD_PARTY_NOTICES from each grammar's upstream license.
-// Run once, after every subdir is written — never per-grammar (the
-// index/notices scans are whole-corpus and would race under parallel
-// packaging).
-function regenerateRuntimeIndex(): ListrTask[] {
-	return [
-		{
-			title: "regenerating grammars.ts index",
-			async task() {
-				await writeGrammarsIndexModule();
-			},
-		},
-		{
-			title: "regenerating THIRD_PARTY_NOTICES",
-			task(_ctx, task) {
-				return task.newListr(writeThirdPartyNotices());
-			},
-		},
-	];
 }

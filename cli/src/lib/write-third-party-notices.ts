@@ -1,7 +1,7 @@
 // Generate THIRD_PARTY_NOTICES — a plain-text bundle of every upstream
 // grammar's LICENSE (and any NOTICE) at its pinned commit. Two copies
 // are written: one at the repo root for GitHub browsing, one inside
-// `packages/arborium-rt/dist/` so the npm tarball ships it.
+// `packages/arborium-rt-wasm/dist/` so the npm tarball ships it.
 //
 // Pipeline per grammar:
 //   1. Shallow-clone the upstream repo (or pick up the local arborium
