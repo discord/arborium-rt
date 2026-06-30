@@ -8,34 +8,84 @@ on:
   workflow_call:
     outputs:
       version:
-        description: arborium-rt version (from packages/arborium-rt/package.json)
-        value: ${{ jobs.package.outputs.version }}
+        description: arborium-rt-wasm version (from packages/arborium-rt-wasm/package.json)
+        value: ${{ jobs.package-wasm.outputs.version }}
       tarball-name:
         description: filename of the packed npm tarball
-        value: ${{ jobs.package.outputs.tarball-name }}
+        value: ${{ jobs.package-wasm.outputs.tarball-name }}
       tarball-artifact:
         description: name of the workflow artifact containing the .tgz tarball
-        value: ${{ jobs.package.outputs.tarball-artifact }}
+        value: ${{ jobs.package-wasm.outputs.tarball-artifact }}
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# `hostTriple()` in packages/arborium-rt-cli/src/util.ts: the patched
-# tree-sitter CLI lives at this path on a linux x64 runner. Both the
-# upload (in the prep job) and the download (in the grammars matrix)
-# need it.
+# `hostTriple()` in cli/src/lib/util.ts: the patched tree-sitter CLI lives at
+# this path on a linux x64 runner. The `tree-sitter-cli` job uploads it here;
+# the `grammars-wasm` matrix and `node-addon-linux` job download it back.
 env:
   TREE_SITTER_BIN_DIR: third_party/tree-sitter/target/x86_64-unknown-linux-gnu/release
 
 jobs:
-  # Single-shot job: bootstrap submodules, build the patched tree-sitter
-  # CLI, build the SIDE_MODULE runtime, build the MAIN_MODULE host. These
-  # outputs are corpus-independent and feed every grammar job.
-  prep:
+  # ── Shared toolchain (host-native) ────────────────────────────────────────
+  # The one prerequisite every grammar build shares: the patched tree-sitter
+  # CLI (sparse-only parser tables). Building it needs cargo but NOT emcc — it's
+  # a host-native binary, independent of any wasm or node target. Also enumerates
+  # the arborium groups that drive the grammar matrix (a pure arborium.yaml read).
+  tree-sitter-cli:
     runs-on: ubuntu-latest
     outputs:
       groups: ${{ steps.list-groups.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Bootstrap submodule (patches + render Cargo.toml + build patched tree-sitter CLI)
+        run: ./scripts/arborium-rt bootstrap
+
+      # Only groups with at least one buildable grammar (license-allowed, not
+      # in DISABLED_GRAMMARS) — drives the grammars-wasm matrix below.
+      - name: Enumerate arborium groups
+        id: list-groups
+        run: |
+          groups=$(./scripts/arborium-rt list-groups --json)
+          echo "groups=$groups" >> "$GITHUB_OUTPUT"
+          echo "found groups: $groups"
+
+      - name: Upload patched tree-sitter CLI
+        uses: actions/upload-artifact@v7
+        with:
+          name: tree-sitter-cli
+          path: ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Browser target: runtime SIDE_MODULE (wasm32-unknown-emscripten) ───────
+  # The Rust runtime wasm. Corpus-independent and independent of the patched
+  # tree-sitter CLI, so it runs from the start in parallel with everything else.
+  # Needs nightly Rust + rust-src (build-std) + the emscripten target + emcc
+  # (the wasm linker). `apply-patches` renders the arborium crates' Cargo.toml
+  # this build depends on; it does NOT build the tree-sitter CLI.
+  runtime-wasm:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
@@ -72,23 +122,14 @@ jobs:
       - name: pnpm install
         run: pnpm install --frozen-lockfile
 
-      - name: Bootstrap submodule (patches + render Cargo.toml + build patched tree-sitter)
-        run: ./scripts/arborium-rt bootstrap
+      # Working-tree-only setup (reset + git apply + render Cargo.toml). The
+      # runtime crate path-deps the arborium crates, whose Cargo.toml is
+      # generated from templates here. No tree-sitter CLI build needed.
+      - name: Apply submodule patches
+        run: ./scripts/arborium-rt apply-patches
 
       - name: Build runtime SIDE_MODULE
         run: ./scripts/arborium-rt build wasm
-
-      - name: Build web-tree-sitter host (MAIN_MODULE)
-        run: ./scripts/arborium-rt build host
-
-      # Drives the grammars matrix below — only groups with at least one
-      # buildable grammar (license-allowed, not in DISABLED_GRAMMARS).
-      - name: Enumerate arborium groups
-        id: list-groups
-        run: |
-          groups=$(./scripts/arborium-rt list-groups --json)
-          echo "groups=$groups" >> "$GITHUB_OUTPUT"
-          echo "found groups: $groups"
 
       - name: Upload runtime wasm
         uses: actions/upload-artifact@v7
@@ -97,6 +138,43 @@ jobs:
           path: target/wasm32-unknown-emscripten/release/arborium_rt_wasm.wasm
           if-no-files-found: error
           retention-days: 7
+
+  # ── Browser target: web-tree-sitter host (MAIN_MODULE=2) ──────────────────
+  # The emscripten MAIN_MODULE that hosts the runtime + grammar SIDE_MODULEs.
+  # Pure emcc compile of the arborium-tree-sitter crate's C sources — no Rust,
+  # no patched tree-sitter CLI, no rendered Cargo.toml, no corpus. Runs from
+  # the start in parallel with everything else.
+  host-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install emsdk 5.0.6
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install 5.0.6
+          "$HOME/emsdk/emsdk" activate 5.0.6
+          source "$HOME/emsdk/emsdk_env.sh"
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EMSDK_NODE=$EMSDK_NODE" >> "$GITHUB_ENV"
+          echo "$EMSDK" >> "$GITHUB_PATH"
+          echo "$EMSDK/upstream/emscripten" >> "$GITHUB_PATH"
+          emcc --version
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web-tree-sitter host (MAIN_MODULE)
+        run: ./scripts/arborium-rt build host
 
       - name: Upload host wasm
         uses: actions/upload-artifact@v7
@@ -108,25 +186,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload patched tree-sitter CLI
-        uses: actions/upload-artifact@v7
-        with:
-          name: tree-sitter-cli
-          path: ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
-          if-no-files-found: error
-          retention-days: 7
-
-  # Per-arborium-group fan-out. Each job builds every grammar in its
-  # group and uploads target/grammars/<lang>/ for the package job to
-  # merge. Needs emcc, the patched tree-sitter CLI (from `prep`), and
-  # askalono (for fetch-license's upstream-clone-and-identify step).
-  grammars:
-    needs: prep
+  # ── Browser target: per-grammar SIDE_MODULEs ──────────────────────────────
+  # Per-arborium-group fan-out. Each job builds every grammar in its group to
+  # wasm and uploads target/grammars/<lang>/ for the package job to merge.
+  # Needs emcc + the patched tree-sitter CLI (from `tree-sitter-cli`) + askalono
+  # (fetch-license). No Rust toolchain — `build` compiles parser.c with emcc and
+  # flattens queries; it never invokes cargo.
+  grammars-wasm:
+    needs: tree-sitter-cli
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        group: ${{ fromJSON(needs.prep.outputs.groups) }}
+        group: ${{ fromJSON(needs.tree-sitter-cli.outputs.groups) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -163,23 +235,22 @@ jobs:
       - name: Make tree-sitter executable
         run: chmod +x ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
 
-      # Required by `build-grammar` for the upstream LICENSE/NOTICE
-      # fetch step — fetch-license shells out to `askalono crawl` to
-      # identify license files in each grammar's shallow clone.
+      # Required by `build` for the upstream LICENSE/NOTICE fetch step —
+      # fetch-license shells out to `askalono crawl` to identify license files
+      # in each grammar's shallow clone.
       - name: Install askalono CLI
         uses: baptiste0928/cargo-install@v3
         with:
           crate: askalono-cli
           version: "0.5.0"
 
-      # `prep` already built the patched tree-sitter CLI — but its patched
-      # *submodule working tree* doesn't propagate across jobs (each runner
-      # gets a fresh `submodules: recursive` checkout). `apply-patches` is
-      # the lighter half of `bootstrap` that only does the working-tree
-      # setup (reset + git apply + render Cargo.toml). Without this,
-      # patches like `0002-inject-markdown-inline.patch` are never applied
-      # here, so the markdown grammar's flattened injections.scm ships
-      # without the `(inline) → markdown_inline` rule.
+      # The patched submodule working tree doesn't propagate across jobs (each
+      # runner gets a fresh `submodules: recursive` checkout). `apply-patches`
+      # is the working-tree half of bootstrap (reset + git apply + render
+      # Cargo.toml) — without it, patches like 0002-inject-markdown-inline are
+      # never applied here, so markdown's flattened injections.scm would ship
+      # without the `(inline) → markdown_inline` rule. We reuse the CLI artifact
+      # from `tree-sitter-cli`, so we skip rebuilding it.
       - name: Apply submodule patches
         run: ./scripts/arborium-rt apply-patches
 
@@ -187,9 +258,8 @@ jobs:
         run: ./scripts/arborium-rt build --group ${{ matrix.group }}
 
       # Each grammar's intermediate `build/` (parser.o, scanner.o, staged
-      # node_modules) lives under target/grammars/<lang>/build/ and balloons
-      # the artifact 5–10×. Only the wasm + flattened .scm files are needed
-      # downstream.
+      # node_modules) lives under target/grammars/<lang>/build/ and balloons the
+      # artifact 5–10×. Only the wasm + flattened .scm files are needed downstream.
       - name: Upload grammar artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -200,12 +270,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Statically-linked Node native addon. Independent of the browser grammar
-  # artifacts — it stages and links its own copy of the whole corpus into one
-  # `.node`. Needs a Rust toolchain + the patched tree-sitter CLI (from `prep`)
-  # + a C/C++ compiler (preinstalled on the runner); NOT emcc.
-  node:
-    needs: prep
+  # ── Node target: statically-linked native addon (host triple, linux/x64) ──
+  # Independent of the browser wasm + grammar artifacts — it stages and links
+  # its own copy of the whole corpus into one `.node`. Needs nightly Rust + the
+  # patched tree-sitter CLI (from `tree-sitter-cli`) + a C/C++ compiler
+  # (preinstalled on the runner); NOT emcc.
+  node-addon-linux:
+    needs: tree-sitter-cli
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -238,9 +309,8 @@ jobs:
         run: chmod +x ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
 
       # The patched submodule working tree doesn't propagate across jobs;
-      # apply-patches re-runs the working-tree half of bootstrap (reset +
-      # git apply + render Cargo.toml) so the addon's grammars and crates
-      # build with the same patches as everywhere else.
+      # apply-patches re-runs the working-tree half of bootstrap so the addon's
+      # grammars and crates build with the same patches as everywhere else.
       - name: Apply submodule patches
         run: ./scripts/arborium-rt apply-patches
 
@@ -272,13 +342,15 @@ jobs:
       - name: Test Node addon package
         run: pnpm --filter @discord/arborium-rt-node test
 
-  # Aggregator: merge every group's grammar artifacts, stage host +
-  # runtime wasms, run `package grammars` to populate dist/grammars/ and
-  # regenerate src/grammars.ts, then build, test, and pack the
-  # publishable tarball. Tarball is uploaded as an artifact so the
-  # publish workflow can consume it without rebuilding.
-  package:
-    needs: [prep, grammars]
+  # ── Browser target: assemble + test + pack the npm package ────────────────
+  # Aggregator: merge every group's grammar wasms, stage the host + runtime
+  # wasms, run `package grammars` to populate dist/grammars/ and regenerate
+  # src/grammars.ts, then build, test, and pack the publishable tarball.
+  # Depends only on the three browser jobs — NOT on node-addon-linux. Pure
+  # node/pnpm work; no Rust, no emcc. The tarball is uploaded so the publish
+  # workflow can consume it without rebuilding.
+  package-wasm:
+    needs: [host-wasm, runtime-wasm, grammars-wasm]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -323,8 +395,8 @@ jobs:
 
       # Required by `package grammars` for THIRD_PARTY_NOTICES regeneration —
       # the notices generator shells out to `askalono crawl` to identify
-      # upstream license files at each grammar's pinned commit. Action
-      # caches the built binary so warm runs are near-instant.
+      # upstream license files at each grammar's pinned commit. Action caches
+      # the built binary so warm runs are near-instant.
       - name: Install askalono CLI
         uses: baptiste0928/cargo-install@v3
         with:
@@ -355,32 +427,32 @@ jobs:
       - name: Build TypeScript packages
         run: pnpm -r build
 
-      # The Node addon package is built + tested in the `node` job (it needs a
-      # Rust toolchain + the patched tree-sitter CLI, which this job doesn't set
-      # up). Exclude it here so its `pretest` (which runs `build-node`) doesn't
-      # fire without those prerequisites.
+      # Only the browser package here. The Node addon package is built + tested
+      # in node-addon-linux (it needs Rust + the patched tree-sitter CLI, which
+      # this job doesn't set up); its `pretest` runs `build node`, so it must not
+      # fire here. The CLI's own unit tests run alongside (no extra toolchain).
       - name: Run tests
         run: pnpm -r --filter='!@discord/arborium-rt-node' test
 
       - name: Resolve version
         id: meta
         run: |
-          version=$(node -p "require('./packages/arborium-rt/package.json').version")
+          version=$(node -p "require('./packages/arborium-rt-wasm/package.json').version")
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Pack tarball
         id: pack
-        working-directory: packages/arborium-rt
+        working-directory: packages/arborium-rt-wasm
         run: |
           pnpm pack --pack-destination "$GITHUB_WORKSPACE"
-          tarball="discord-arborium-rt-${{ steps.meta.outputs.version }}.tgz"
+          tarball="discord-arborium-rt-wasm-${{ steps.meta.outputs.version }}.tgz"
           if [ ! -f "$GITHUB_WORKSPACE/$tarball" ]; then
             echo "expected tarball not found: $tarball" >&2
             ls "$GITHUB_WORKSPACE" >&2
             exit 1
           fi
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
-          echo "artifact-name=arborium-rt-${{ steps.meta.outputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=arborium-rt-wasm-${{ steps.meta.outputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v7

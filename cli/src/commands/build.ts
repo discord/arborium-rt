@@ -6,9 +6,9 @@
 // structurally-odd vendored layouts). Each failure is logged but doesn't
 // abort the run; the closing summary names winners and losers.
 //
-// Per-grammar work runs in parallel (bounded by `jobs`) — each grammar's
-// stderr is line-prefixed with its id so interleaved tool output stays
-// readable on a shared terminal.
+// Per-grammar work runs in parallel (bounded by `os.availableParallelism()`)
+// — each grammar's stderr is line-prefixed with its id so interleaved tool
+// output stays readable on a shared terminal.
 
 import { availableParallelism } from "node:os";
 import { Listr, type ListrTask } from "listr2";
@@ -27,8 +27,6 @@ export interface BuildAllArgs {
 	group?: string;
 	/** If set, don't run `package` after `build-grammar` (wasm + queries only). */
 	skipPackage?: boolean;
-	/** Max concurrent grammar builds. Defaults to `os.availableParallelism()`. */
-	jobs?: number;
 }
 
 export interface BuildAllResult {

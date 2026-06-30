@@ -107,7 +107,6 @@ interface ManifestGrammar {
 export interface BuildNodeGrammarsArgs {
 	/** Restrict to these grammar ids (dev loop). */
 	only?: readonly string[];
-	jobs?: number;
 }
 
 interface BuildNodeGrammarsContext {

@@ -22,6 +22,11 @@ function cliVersion(): string {
 		.version;
 }
 
+/** Treat any trailing positional args as an explicit grammar-id filter. */
+function idsFilter(opts: { _: string[] }): string[] | undefined {
+	return opts._.length > 0 ? opts._ : undefined;
+}
+
 const prog = sade("arborium-rt").version(cliVersion());
 
 prog.command("bootstrap").action(async () => {
@@ -39,24 +44,16 @@ prog
 
 prog
 	.command("build")
-	.describe("build + package every grammar in the corpus (default: all)")
+	.describe("build + package grammars in the corpus (default: all)")
 	.option("--group", "only build grammars in this arborium group")
-	.option("--only", "comma-separated grammar ids to build")
-	.option("-j, --jobs", "max concurrent grammar builds")
+	.example("build              # build every grammar")
+	.example("build json css     # build only these grammars")
+	.example("build --group group-acorn")
 	.action(async (opts) => {
-		const only =
-			typeof opts.only === "string"
-				? opts.only
-						.split(",")
-						.map((s: string) => s.trim())
-						.filter(Boolean)
-				: undefined;
-		const jobs =
-			opts.jobs !== undefined ? Number.parseInt(String(opts.jobs), 10) : undefined;
+		const only = idsFilter(opts);
 		await buildAll({
-			...(only && only.length > 0 ? { only } : {}),
+			...(only ? { only } : {}),
 			...(opts.group ? { group: String(opts.group) } : {}),
-			...(jobs !== undefined && Number.isFinite(jobs) ? { jobs } : {}),
 		}).run();
 	});
 
@@ -90,9 +87,16 @@ prog.command("build grammar <group> <lang>").action(async (group, lang) => {
 
 prog
 	.command("build node")
-	.option("skip-grammars")
-	.action(async (options) => {
-		await buildNode(options).run();
+	.describe("build the statically-linked Node native addon (host triple)")
+	.option("--skip-grammars", "reuse an existing manifest instead of re-staging")
+	.example("build node                 # link every grammar")
+	.example("build node json markdown   # link only these grammars")
+	.action(async (opts) => {
+		const only = idsFilter(opts);
+		await buildNode({
+			...(only ? { only } : {}),
+			skipGrammars: opts["skip-grammars"] === true,
+		}).run();
 	});
 
 prog
