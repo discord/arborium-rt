@@ -11,8 +11,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { buildGrammarIndex } from "../src/arborium-yaml.js";
-import { flattenQuery } from "../src/flatten.js";
+import { buildGrammarIndex } from "../src/lib/arborium-yaml.js";
+import { flattenQuery } from "../src/lib/flatten.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
