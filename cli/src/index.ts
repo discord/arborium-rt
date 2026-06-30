@@ -114,8 +114,16 @@ prog
 	.describe(
 		"link the Node addon (for the host platform) from grammar sources staged by `build node grammars`",
 	)
-	.action(async () => {
-		await buildNode().run();
+	.option(
+		"--target",
+		"cross-compile for this Rust target triple (e.g. x86_64-apple-darwin) instead of the host platform",
+	)
+	.example("build node                           # build for the host platform")
+	.example(
+		"build node --target x86_64-apple-darwin   # cross-compile darwin x64 from an arm64 mac",
+	)
+	.action(async (opts) => {
+		await buildNode(opts.target ? String(opts.target) : undefined).run();
 	});
 
 prog

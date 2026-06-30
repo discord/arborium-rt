@@ -351,8 +351,14 @@ jobs:
             runs-on: ubuntu-latest
           - platform: linux-arm64
             runs-on: ubuntu-24.04-arm
+          # darwin-x64 is cross-compiled from the Apple Silicon runner:
+          # GitHub's Intel macOS runners (macos-13) queue for a very long time,
+          # and Apple's clang cross-compiles to x86_64 with no extra toolchain.
+          # napi names the artifact after the target triple's platformArchABI
+          # (x86_64-apple-darwin → darwin-x64), so the sub-package dir is the same.
           - platform: darwin-x64
-            runs-on: macos-13
+            runs-on: macos-14
+            target: x86_64-apple-darwin
           - platform: darwin-arm64
             runs-on: macos-14
           - platform: win32-x64-msvc
@@ -377,7 +383,11 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      # `targets` adds the cross-compile std for matrix.target (e.g.
+      # x86_64-apple-darwin on the arm64 runner); empty for native entries.
       - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -398,12 +408,13 @@ jobs:
       - name: Apply submodule patches
         run: ./scripts/arborium-rt apply-patches
 
-      # Builds the addon for this runner's native platform and stages it into
-      # its per-platform sub-package, packages/arborium-rt-node/npm/<platform>/.
+      # Builds the addon and stages it into its per-platform sub-package,
+      # packages/arborium-rt-node/npm/<platform>/. matrix.target (when set)
+      # cross-compiles; otherwise it builds for this runner's native platform.
       # It also regenerates binding.cjs + binding.d.cts, which the next step's
       # tsc needs to typecheck the wrapper.
       - name: Link Node native addon (${{ matrix.platform }})
-        run: ./scripts/arborium-rt build node
+        run: ./scripts/arborium-rt build node ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
 
       - name: Annotate addon size
         shell: bash
@@ -433,7 +444,13 @@ jobs:
       # workspace package), WITHOUT the `pretest` re-stage (`build node grammars
       # …`) the default `test` runs. Re-staging would need the tree-sitter CLI,
       # which this job deliberately doesn't have.
+      #
+      # Skipped for cross-compiled entries (matrix.target): the runner can't
+      # load a foreign-arch addon (e.g. an x86_64 .node on the arm64 runner).
+      # The native darwin-arm64 entry already exercises the same TS + addon path
+      # on macOS.
       - name: Test Node addon package
+        if: ${{ !matrix.target }}
         run: pnpm --filter @discord/arborium-rt-node run test:ci
 
   # ── Browser target: assemble + test + pack the npm package ────────────────

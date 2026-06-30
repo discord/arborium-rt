@@ -35,8 +35,15 @@ const ADDON_RE = /^arborium-rt-node\.(.+)\.node$/;
  * `nodeGrammarsOut` (e.g. produced by `build node grammars`, or downloaded from
  * the `grammars-node` matrix). Regenerates the manifest by scanning the staged
  * dirs, so it needs neither the tree-sitter CLI nor a manifest artifact.
+ *
+ * `target` cross-compiles for an explicit Rust target triple instead of the
+ * host platform — used to build the darwin-x64 addon on an Apple Silicon
+ * runner (`x86_64-apple-darwin`), since GitHub's Intel macOS runners queue for
+ * a long time. The target's Rust std must already be installed (`rustup target
+ * add <triple>`); Apple's clang cross-compiles the cc-built parser sources
+ * with no extra toolchain.
  */
-export function buildNode() {
+export function buildNode(target?: string) {
 	const p = resolvePaths();
 
 	return new Listr([
@@ -46,13 +53,20 @@ export function buildNode() {
 				await rebuildManifestFromStaged(p);
 			},
 		},
-		napiBuildTask(p),
+		napiBuildTask(p, target),
 		stageAddonTask(p),
 	]);
 }
 
-/** `napi build` for the host platform from the npm package dir. */
-function napiBuildTask(p: ReturnType<typeof paths>): ListrTask {
+/**
+ * `napi build` from the npm package dir. `--platform` names the artifact after
+ * the target's platformArchABI (e.g. `darwin-x64`), so the staged sub-package
+ * dir is the same whether native or cross. Without `target`, that's the
+ * runner's own platform; with `target`, `--target <triple>` cross-compiles for
+ * it (its Rust std must already be installed). `--target` alone drops the
+ * platformArchABI suffix from the filename, so `--platform` must stay.
+ */
+function napiBuildTask(p: ReturnType<typeof paths>, target?: string): ListrTask {
 	return {
 		title: "building arborium-rt-node",
 		async task(_ctx, task) {
@@ -66,17 +80,15 @@ function napiBuildTask(p: ReturnType<typeof paths>): ListrTask {
 			);
 			const napiBin = join(p.nodePackageDir, "node_modules", ".bin", "napi");
 
-			// `--platform` builds for (and names the artifact after) the runner's
-			// own platform — every CI matrix entry is a native runner, so there's
-			// no `--target`. It also respects `--js`/`--dts` to name the generated
-			// loader + types the wrapper imports.
-			task.output = "napi build --platform";
+			const targetArgs = target ? ["--target", target] : [];
+			task.output = `napi build --platform ${targetArgs.join(" ")}`.trim();
 			await run(
 				task.stdout(),
 				napiBin,
 				[
 					"build",
 					"--platform",
+					...targetArgs,
 					"--release",
 					"--cargo-cwd",
 					cargoCwd,
