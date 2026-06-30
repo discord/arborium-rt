@@ -6,10 +6,10 @@
 // plain `ts_*` names (upstream only exports `*_wasm` JS-bridge variants)
 // and the libc/pthread surface Rust's std pulls in.
 
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-
-import { hasCommand, Logger, paths, run } from "./util.js";
+import { Listr } from "listr2";
+import { paths, run } from "../../lib/util.ts";
 
 /**
  * Plain tree-sitter C symbols arborium-rt's runtime imports that aren't in
@@ -102,113 +102,117 @@ const EXPORTED_RUNTIME_METHODS = [
 	"LE_HEAP_STORE_I64",
 ];
 
-export async function buildHost(): Promise<void> {
+export function buildHost() {
 	const p = paths();
-	const log = new Logger("host");
 
-	if (!(await hasCommand("emcc"))) {
-		throw new Error(
-			"emcc not found on PATH. install emsdk 5.x (CI pins 5.0.6) and source emsdk_env.sh.",
-		);
-	}
+	return new Listr([
+		{
+			title: "compiling web-tree-sitter.wasm (MAIN_MODULE=2)",
+			async task(_ctx, task) {
+				await mkdir(p.hostWasmOut, { recursive: true });
 
-	mkdirSync(p.hostWasmOut, { recursive: true });
+				const baseExports = (
+					await Promise.all(
+						[
+							join(p.bindingRoot, "src", "wasm", "stdlib-symbols.txt"),
+							join(p.bindingRoot, "binding_web", "lib", "exports.txt"),
+						].map(async (f) =>
+							(
+								await readFile(f, "utf8")
+							)
+								.split("\n")
+								.map((line) =>
+									line.trim().replace(/^"/, "").replace(/",?$/, ""),
+								)
+								.filter((s) => s.length > 0)
+								.map((s) => `_${s}`)
+								.join(","),
+						),
+					)
+				)
+					.filter((s) => s.length > 0)
+					.join(",");
 
-	const baseExports = [
-		join(p.bindingRoot, "src", "wasm", "stdlib-symbols.txt"),
-		join(p.bindingRoot, "binding_web", "lib", "exports.txt"),
-	]
-		.map((f) =>
-			readFileSync(f, "utf8")
-				.split("\n")
-				.map((line) => line.trim().replace(/^"/, "").replace(/",?$/, ""))
-				.filter((s) => s.length > 0)
-				.map((s) => `_${s}`)
-				.join(","),
-		)
-		.filter((s) => s.length > 0)
-		.join(",");
+				const exports = [
+					baseExports,
+					...EXTRA_TS_EXPORTS,
+					...EXTRA_LIBC_EXPORTS,
+				].join(",");
 
-	const exports = [
-		baseExports,
-		...EXTRA_TS_EXPORTS,
-		...EXTRA_LIBC_EXPORTS,
-	].join(",");
-
-	log.step("compiling web-tree-sitter.wasm (MAIN_MODULE=2)");
-	await run(
-		log,
-		"emcc",
-		[
-			"-O2",
-			"--minify",
-			"0",
-			"-gsource-map=inline",
-			"-fno-exceptions",
-			"-std=c11",
-			"-s",
-			"WASM=1",
-			"-s",
-			"MODULARIZE=1",
-			"-s",
-			"EXPORT_ES6=1",
-			// web,worker only — drops the Node branch that emits
-			// `await import("module")` and bare `require("fs"|"path"|"url"|"crypto")`
-			// calls, which rspack/webpack static-analyze and reject. The
-			// runtime loader pre-fetches the host wasm via resolveWasm and
-			// hands it to the factory as `Module.wasmBinary`, so Node tests
-			// don't rely on the dropped fs-based auto-loader.
-			"-s",
-			"ENVIRONMENT=web,worker",
-			"-s",
-			"INITIAL_MEMORY=33554432",
-			"-s",
-			"ALLOW_MEMORY_GROWTH=1",
-			"-s",
-			"SUPPORT_BIG_ENDIAN=1",
-			"-s",
-			"WASM_BIGINT=1",
-			"-s",
-			"MAIN_MODULE=2",
-			"-s",
-			"FILESYSTEM=0",
-			"-s",
-			"NODEJS_CATCH_EXIT=0",
-			"-s",
-			"NODEJS_CATCH_REJECTION=0",
-			"-s",
-			`EXPORTED_FUNCTIONS=${exports}`,
-			"-s",
-			`EXPORTED_RUNTIME_METHODS=${EXPORTED_RUNTIME_METHODS.join(",")}`,
-			"-D",
-			"fprintf(...)=",
-			"-D",
-			"printf(...)=",
-			"-D",
-			"NDEBUG=",
-			"-D",
-			"_POSIX_C_SOURCE=200112L",
-			"-D",
-			"_DEFAULT_SOURCE=",
-			"-D",
-			"_BSD_SOURCE=",
-			"-D",
-			"_DARWIN_C_SOURCE=",
-			"-I",
-			"src",
-			"-I",
-			"include",
-			"--js-library",
-			"binding_web/lib/imports.js",
-			"--pre-js",
-			"binding_web/lib/prefix.js",
-			"-o",
-			join(p.hostWasmOut, "web-tree-sitter.mjs"),
-			"src/lib.c",
-			"binding_web/lib/tree-sitter.c",
-		],
-		{ cwd: p.bindingRoot },
-	);
-
-	log.step(`built web-tree-sitter.{wasm,mjs} in ${p.hostWasmOut}`);
+				await run(
+					task.stdout(),
+					"emcc",
+					[
+						"-O2",
+						"--minify",
+						"0",
+						"-gsource-map=inline",
+						"-fno-exceptions",
+						"-std=c11",
+						"-s",
+						"WASM=1",
+						"-s",
+						"MODULARIZE=1",
+						"-s",
+						"EXPORT_ES6=1",
+						// web,worker only — drops the Node branch that emits
+						// `await import("module")` and bare `require("fs"|"path"|"url"|"crypto")`
+						// calls, which rspack/webpack static-analyze and reject. The
+						// runtime loader pre-fetches the host wasm via resolveWasm and
+						// hands it to the factory as `Module.wasmBinary`, so Node tests
+						// don't rely on the dropped fs-based auto-loader.
+						"-s",
+						"ENVIRONMENT=web,worker",
+						"-s",
+						"INITIAL_MEMORY=33554432",
+						"-s",
+						"ALLOW_MEMORY_GROWTH=1",
+						"-s",
+						"SUPPORT_BIG_ENDIAN=1",
+						"-s",
+						"WASM_BIGINT=1",
+						"-s",
+						"MAIN_MODULE=2",
+						"-s",
+						"FILESYSTEM=0",
+						"-s",
+						"NODEJS_CATCH_EXIT=0",
+						"-s",
+						"NODEJS_CATCH_REJECTION=0",
+						"-s",
+						`EXPORTED_FUNCTIONS=${exports}`,
+						"-s",
+						`EXPORTED_RUNTIME_METHODS=${EXPORTED_RUNTIME_METHODS.join(",")}`,
+						"-D",
+						"fprintf(...)=",
+						"-D",
+						"printf(...)=",
+						"-D",
+						"NDEBUG=",
+						"-D",
+						"_POSIX_C_SOURCE=200112L",
+						"-D",
+						"_DEFAULT_SOURCE=",
+						"-D",
+						"_BSD_SOURCE=",
+						"-D",
+						"_DARWIN_C_SOURCE=",
+						"-I",
+						"src",
+						"-I",
+						"include",
+						"--js-library",
+						"binding_web/lib/imports.js",
+						"--pre-js",
+						"binding_web/lib/prefix.js",
+						"-o",
+						join(p.hostWasmOut, "web-tree-sitter.mjs"),
+						"src/lib.c",
+						"binding_web/lib/tree-sitter.c",
+					],
+					{ cwd: p.bindingRoot },
+				);
+			},
+		},
+	]);
 }

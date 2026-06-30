@@ -8,10 +8,9 @@
 // (`xtask/templates/lib.stpl.rs`): prepends come first, this grammar's own
 // last, so own rules win on tree-sitter pattern-priority ties.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-
-import type { GrammarIndexEntry } from "./arborium-yaml.js";
+import type { GrammarIndexEntry } from "./arborium-yaml.ts";
 
 export const QUERY_TYPES = ["highlights", "injections", "locals"] as const;
 export type QueryType = (typeof QUERY_TYPES)[number];
@@ -24,12 +23,12 @@ export type QueryType = (typeof QUERY_TYPES)[number];
  * The `seen` parameter catches cycles in the prepend graph — shouldn't occur
  * in practice, but cheap to guard.
  */
-export function flattenQuery(
+export async function flattenQuery(
 	grammarId: string,
 	qtype: QueryType,
 	index: Map<string, GrammarIndexEntry>,
 	seen: ReadonlySet<string> = new Set(),
-): string {
+): Promise<string> {
 	if (seen.has(grammarId)) {
 		throw new Error(
 			`cycle in query-prepend graph at ${grammarId} (visited: ${[...seen].join(", ")})`,
@@ -54,14 +53,14 @@ export function flattenQuery(
 				`${grammarId}: prepend "${prepend.crate}" resolves to unknown grammar "${baseId}"`,
 			);
 		}
-		const sub = flattenQuery(baseId, qtype, index, nextSeen);
+		const sub = await flattenQuery(baseId, qtype, index, nextSeen);
 		if (sub) chunks.push(sub);
 	}
 
 	const ownScm = join(entry.defPath, "queries", `${qtype}.scm`);
-	if (existsSync(ownScm)) {
-		chunks.push(readFileSync(ownScm, "utf8"));
-	}
+	try {
+		chunks.push(await readFile(ownScm, "utf8"));
+	} catch {}
 
 	// Blank-line separator between chunks keeps the boundary readable in case
 	// of debug; matches the Python flattener's behavior.
@@ -73,16 +72,16 @@ export function flattenQuery(
  * file if the flattened content is non-empty — avoids misleading empty
  * `injections.scm` / `locals.scm` stubs.
  */
-export function flattenAllIntoDir(
+export async function flattenAllIntoDir(
 	grammarId: string,
 	index: Map<string, GrammarIndexEntry>,
 	outDir: string,
-): void {
-	mkdirSync(outDir, { recursive: true });
+) {
+	await mkdir(outDir, { recursive: true });
 	for (const qtype of QUERY_TYPES) {
-		const content = flattenQuery(grammarId, qtype, index);
+		const content = await flattenQuery(grammarId, qtype, index);
 		if (content) {
-			writeFileSync(join(outDir, `${qtype}.scm`), content);
+			await writeFile(join(outDir, `${qtype}.scm`), content);
 		}
 	}
 }

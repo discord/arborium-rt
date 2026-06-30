@@ -1,7 +1,7 @@
 // Generate THIRD_PARTY_NOTICES — a plain-text bundle of every upstream
 // grammar's LICENSE (and any NOTICE) at its pinned commit. Two copies
 // are written: one at the repo root for GitHub browsing, one inside
-// `packages/arborium-rt/dist/` so the npm tarball ships it.
+// `packages/arborium-rt-wasm/dist/` so the npm tarball ships it.
 //
 // Pipeline per grammar:
 //   1. Shallow-clone the upstream repo (or pick up the local arborium
@@ -23,17 +23,18 @@
 // runs are byte-reproducible. askalono is a developer prerequisite
 // (see CLAUDE.md).
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
+import type { Writable } from "node:stream";
 
+import type { ListrTask } from "listr2";
 import spdxSatisfies from "spdx-satisfies";
-
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,
 	resolveCommit,
-} from "./arborium-yaml.js";
+} from "./arborium-yaml.ts";
 import {
 	ARBORIUM_LICENSE_EXPR,
 	cloneDirFor,
@@ -44,8 +45,8 @@ import {
 	isLocalGrammar,
 	MIN_SCORE,
 	type NoticeFile,
-} from "./grammar-clone.js";
-import { hasCommand, Logger, paths, runPool } from "./util.js";
+} from "./grammar-clone.ts";
+import { paths } from "./util.ts";
 
 /** Bounded clone parallelism. ~100 grammars × network-dominant; 8 is plenty. */
 const DEFAULT_CLONE_CONCURRENCY = 8;
@@ -75,70 +76,84 @@ interface NoticeEntry {
 	notices: NoticeFile[];
 }
 
-export async function writeThirdPartyNotices(): Promise<void> {
+export function writeThirdPartyNotices(): ListrTask[] {
 	const p = paths();
-	const log = new Logger("notices");
-
-	if (!(await hasCommand("askalono"))) {
-		throw new Error(
-			"askalono not on PATH — install via `cargo install --locked askalono-cli` or download from https://github.com/jpeddicord/askalono/releases (see CLAUDE.md prereqs)",
-		);
-	}
-
-	const index = buildGrammarIndex(p.langsRoots);
-	const targets = [...index.entries()].sort(([a], [b]) => a.localeCompare(b));
-	if (targets.length === 0) {
-		log.warn("grammar index is empty; skipping notices generation");
-		return;
-	}
-
-	const entries: NoticeEntry[] = [];
-	const failed: Array<{ id: string; reason: string }> = [];
-
 	const concurrency = Math.max(
 		1,
 		Math.min(DEFAULT_CLONE_CONCURRENCY, availableParallelism()),
 	);
 
-	await runPool(targets, concurrency, async ([id, entry]) => {
-		try {
-			entries.push(await processGrammar(id, entry));
-		} catch (e) {
-			const reason = e instanceof Error ? e.message : String(e);
-			failed.push({ id, reason });
-		}
-	});
+	// Closure state threaded across the three tasks below — fresh per call, so
+	// standalone (`notices`) and nested (`package grammars`) runs never collide.
+	let targets: Array<[string, GrammarIndexEntry]> = [];
+	const entries: NoticeEntry[] = [];
+	const failed: Array<{ id: string; reason: string }> = [];
 
-	if (failed.length > 0) {
-		for (const { id, reason } of failed) {
-			log.warn(`${id}: ${reason.split("\n")[0]}`);
-		}
-		throw new Error(
-			`notices generation failed for ${failed.length}/${targets.length} grammar(s); first failure: ${failed[0]!.id}: ${failed[0]!.reason.split("\n")[0]}`,
-		);
-	}
+	return [
+		{
+			title: "scanning grammar index",
+			async task() {
+				const index = await buildGrammarIndex(p.langsRoots);
+				targets = [...index.entries()].sort(([a], [b]) => a.localeCompare(b));
+			},
+		},
+		{
+			title: "collecting upstream licenses",
+			skip: () => targets.length === 0 && "grammar index is empty",
+			// One task per grammar — each clones (or reuses the cache), runs
+			// askalono, and reconciles. Failures are collected (exitOnError: false)
+			// so a single bad grammar doesn't abort the rest; the write task below
+			// hard-fails on any collected failure.
+			task(_ctx, task) {
+				return task.newListr(
+					targets.map(([id, entry]) => ({
+						title: id,
+						async task(_ctx, task) {
+							try {
+								entries.push(await processGrammar(id, entry, task.stdout()));
+							} catch (e) {
+								const reason = e instanceof Error ? e.message : String(e);
+								failed.push({ id, reason });
+								throw e;
+							}
+						},
+					})),
+					{ concurrent: concurrency, exitOnError: false },
+				);
+			},
+		},
+		{
+			title: "writing THIRD_PARTY_NOTICES",
+			skip: () => targets.length === 0,
+			async task() {
+				if (failed.length > 0) {
+					throw new Error(
+						`notices generation failed for ${failed.length}/${targets.length} grammar(s); first failure: ${failed[0]!.id}: ${failed[0]!.reason.split("\n")[0]}`,
+					);
+				}
 
-	entries.sort((a, b) => a.id.localeCompare(b.id));
-	const text = renderBundle(entries);
+				entries.sort((a, b) => a.id.localeCompare(b.id));
+				const text = renderBundle(entries);
 
-	mkdirSync(join(p.runtimePackageDir, "dist"), { recursive: true });
-	writeFileSync(join(p.runtimePackageDir, "dist", "THIRD_PARTY_NOTICES"), text);
-	writeFileSync(join(p.repoRoot, "THIRD_PARTY_NOTICES"), text);
-
-	log.step(
-		`wrote THIRD_PARTY_NOTICES (${entries.length} grammars, ${entries.reduce((n, e) => n + e.licenses.length, 0)} license file(s), ${entries.reduce((n, e) => n + e.notices.length, 0)} notice file(s))`,
-	);
+				await mkdir(join(p.runtimePackageDir, "dist"), { recursive: true });
+				await writeFile(
+					join(p.runtimePackageDir, "dist", "THIRD_PARTY_NOTICES"),
+					text,
+				);
+				await writeFile(join(p.repoRoot, "THIRD_PARTY_NOTICES"), text);
+			},
+		},
+	];
 }
 
 async function processGrammar(
 	id: string,
 	entry: GrammarIndexEntry,
+	output: Writable,
 ): Promise<NoticeEntry> {
-	const log = new Logger(id);
-
 	if (isLocalGrammar(entry)) {
 		const arboriumRoot = paths().submoduleRoot;
-		const detections = await detectLicenses(log, arboriumRoot);
+		const detections = await detectLicenses(output, arboriumRoot);
 		if (detections.length === 0) {
 			throw new Error(
 				`askalono found no license files at the arborium submodule root (${arboriumRoot})`,
@@ -160,9 +175,9 @@ async function processGrammar(
 	}
 	const commit = resolveCommit(id, entry);
 	const cloneDir = cloneDirFor(id);
-	await ensureClone(log, cloneDir, entry.repo, commit);
+	await ensureClone(output, cloneDir, entry.repo, commit);
 
-	const detections = await detectLicenses(log, cloneDir);
+	const detections = await detectLicenses(output, cloneDir);
 	if (detections.length === 0) {
 		throw new Error(`askalono found no license files in ${cloneDir}`);
 	}
@@ -175,7 +190,7 @@ async function processGrammar(
 	}
 	reconcile(id, detections, expected, entry.license);
 
-	const notices = findNoticeFiles(cloneDir);
+	const notices = await findNoticeFiles(cloneDir);
 
 	return {
 		id,

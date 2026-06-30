@@ -22,7 +22,7 @@
 	],
 	"scripts": {
 		"build": "tsc",
-		"pretest": "../../scripts/arborium-rt build-node --only json,markdown,markdown_inline,html,css,javascript && tsc",
+		"pretest": "../../scripts/arborium-rt build node json markdown markdown_inline html css javascript && tsc",
 		"test": "vitest run"
 	},
 	"devDependencies": {

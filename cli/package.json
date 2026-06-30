@@ -1,0 +1,29 @@
+{
+  "name": "@discord/arborium-rt-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dev CLI for building @discord/arborium-rt and its grammar subpath modules. Not published — run via tsx.",
+  "license": "MIT",
+  "type": "module",
+  "bin": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "listr2": "^10.2.2",
+    "ora": "^9.4.1",
+    "sade": "^1.8.1",
+    "spdx-satisfies": "^6.0.0",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/spdx-satisfies": "^6.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.0.5"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

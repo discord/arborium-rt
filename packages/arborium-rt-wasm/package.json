@@ -1,0 +1,44 @@
+{
+  "name": "@discord/arborium-rt-wasm",
+  "version": "0.1.7",
+  "description": "Dynamically-linked tree-sitter + arborium runtime for the browser",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/appellation/arborium-rt.git"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./host-module": "./dist/host/web-tree-sitter.mjs",
+    "./host-wasm": "./dist/host/web-tree-sitter.wasm",
+    "./runtime-wasm": "./dist/runtime/arborium_emscripten_runtime.wasm"
+  },
+  "imports": {
+    "#wasm-loader": {
+      "types": "./dist/wasm-loader.d.ts",
+      "browser": "./dist/wasm-loader.browser.js",
+      "default": "./dist/wasm-loader.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "pretest": "../../scripts/arborium-rt package grammars json && tsc && ../../scripts/arborium-rt package host",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/emscripten": "^1.41.5",
+    "@types/node": "^25.6.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -11,13 +11,13 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { buildGrammarIndex } from "../src/arborium-yaml.js";
-import { flattenQuery } from "../src/flatten.js";
+import { buildGrammarIndex } from "../src/lib/arborium-yaml.js";
+import { flattenQuery } from "../src/lib/flatten.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, "..", "..", "..");
+const repoRoot = resolve(here, "..", "..");
 const langsRoot = resolve(repoRoot, "third_party", "arborium", "langs");
-const index = buildGrammarIndex([langsRoot]);
+const index = await buildGrammarIndex([langsRoot]);
 
 function lineCount(s: string): number {
 	return s.split("\n").length;
@@ -48,30 +48,33 @@ const CASES: ReadonlyArray<readonly [string, number]> = [
 ];
 
 describe("flattenQuery", () => {
-	it.each(CASES)("flattens %s highlights to %i lines", (lang, expected) => {
-		const got = lineCount(flattenQuery(lang, "highlights", index));
-		expect(got).toBe(expected);
-	});
+	it.each(CASES)(
+		"flattens %s highlights to %i lines",
+		async (lang, expected) => {
+			const got = lineCount(await flattenQuery(lang, "highlights", index));
+			expect(got).toBe(expected);
+		},
+	);
 
-	it("pass-through grammars (no prepend) return their own highlights unchanged", () => {
+	it("pass-through grammars (no prepend) return their own highlights unchanged", async () => {
 		const jsonEntry = index.get("json");
 		expect(jsonEntry).toBeDefined();
 		const own = readFileSync(
 			resolve(jsonEntry!.defPath, "queries", "highlights.scm"),
 			"utf8",
 		);
-		expect(flattenQuery("json", "highlights", index)).toBe(own);
+		expect(await flattenQuery("json", "highlights", index)).toBe(own);
 	});
 
-	it("returns empty string for missing query types on grammars that lack them", () => {
+	it("returns empty string for missing query types on grammars that lack them", async () => {
 		// JSON has no injections.scm, no injections prepend.
-		expect(flattenQuery("json", "injections", index)).toBe("");
-		expect(flattenQuery("json", "locals", index)).toBe("");
+		expect(await flattenQuery("json", "injections", index)).toBe("");
+		expect(await flattenQuery("json", "locals", index)).toBe("");
 	});
 
-	it("throws on unknown grammar id", () => {
-		expect(() => flattenQuery("bogus-lang-xyz", "highlights", index)).toThrow(
-			/unknown grammar id/,
-		);
+	it("throws on unknown grammar id", async () => {
+		await expect(
+			flattenQuery("bogus-lang-xyz", "highlights", index),
+		).rejects.toThrow(/unknown grammar id/);
 	});
 });

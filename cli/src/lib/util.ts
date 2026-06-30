@@ -3,30 +3,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-
-/**
- * Tagged logger. Every line written through a logger (including lines
- * emitted by child processes started via `run(logger, ...)`) is prefixed
- * with `[<prefix>] ` so parallel builds stay readable on a shared stderr.
- */
-export class Logger {
-	constructor(readonly prefix: string) {}
-
-	/** Structured "==>" progress line. */
-	step(msg: string): void {
-		process.stderr.write(`[${this.prefix}] ==> ${msg}\n`);
-	}
-
-	/** Non-fatal warning. */
-	warn(msg: string): void {
-		process.stderr.write(`[${this.prefix}] warn: ${msg}\n`);
-	}
-
-	/** Plain tagged line — no step/warn decoration. */
-	info(msg: string): void {
-		process.stderr.write(`[${this.prefix}] ${msg}\n`);
-	}
-}
+import type { Writable } from "node:stream";
 
 /**
  * Walk up from `start` until a directory contains a marker file identifying
@@ -113,9 +90,9 @@ export interface Paths {
 	readonly packagesOut: string;
 	readonly hostWasmOut: string;
 	readonly runtimeWasm: string;
-	/** `packages/arborium-rt/` — the runtime library package. */
+	/** `packages/arborium-rt-wasm/` — the browser runtime library package. */
 	readonly runtimePackageDir: string;
-	/** `packages/arborium-rt-cli/` — this CLI's own package. */
+	/** `cli/` — this CLI's own package. */
 	readonly cliPackageDir: string;
 	readonly bindingRoot: string;
 }
@@ -151,7 +128,13 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
 		grammarsOut: join(repoRoot, "target", "grammars"),
 		nodeGrammarsOut: join(repoRoot, "target", "node-grammars"),
 		nodePackageDir: join(repoRoot, "packages", "arborium-rt-node"),
-		packagesOut: join(repoRoot, "packages", "arborium-rt", "dist", "grammars"),
+		packagesOut: join(
+			repoRoot,
+			"packages",
+			"arborium-rt-wasm",
+			"dist",
+			"grammars",
+		),
 		hostWasmOut: join(repoRoot, "target", "host-wasm"),
 		runtimeWasm: join(
 			repoRoot,
@@ -160,8 +143,8 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
 			"release",
 			"arborium_rt_wasm.wasm",
 		),
-		runtimePackageDir: join(repoRoot, "packages", "arborium-rt"),
-		cliPackageDir: join(repoRoot, "packages", "arborium-rt-cli"),
+		runtimePackageDir: join(repoRoot, "packages", "arborium-rt-wasm"),
+		cliPackageDir: join(repoRoot, "cli"),
 	};
 }
 
@@ -196,22 +179,20 @@ export interface RunOptions {
 }
 
 /**
- * Run a command with its stdout/stderr line-buffered and tagged with the
- * logger's prefix before being forwarded to our stderr. Rejects on non-zero
- * exit; the Error message includes the command for grep-ability.
- *
- * Always pipes — callers that don't care about output should use
- * `runSilent` instead.
+ * Run a command with its stdout/stderr piped to `output` (typically a listr
+ * task's stream). Rejects on non-zero exit; the Error message includes the
+ * command for grep-ability.
  */
 export async function run(
-	logger: Logger,
+	output: Writable,
 	cmd: string,
 	args: readonly string[],
 	options: RunOptions = {},
 ): Promise<void> {
 	await new Promise<void>((resolvePromise, rejectPromise) => {
 		const wantsInput = options.input !== undefined;
-		const child = spawn(cmd, args as string[], {
+
+		const child = spawn(cmd, args, {
 			cwd: options.cwd,
 			env: options.env ? { ...process.env, ...options.env } : process.env,
 			stdio: [wantsInput ? "pipe" : "ignore", "pipe", "pipe"],
@@ -219,9 +200,9 @@ export async function run(
 		if (wantsInput) {
 			child.stdin?.end(options.input);
 		}
-		const tag = `[${logger.prefix}] `;
-		pipePrefixed(child.stdout, tag);
-		pipePrefixed(child.stderr, tag);
+		child.stdout?.pipe(output);
+		child.stderr?.pipe(output);
+
 		child.once("error", rejectPromise);
 		child.once("close", (code) => {
 			if (code === 0) resolvePromise();
@@ -234,35 +215,13 @@ export async function run(
 }
 
 /**
- * Line-buffer a piped child stream and write each line to our stderr with a
- * tag prefix. Any trailing non-newline-terminated output is flushed on `end`.
- */
-function pipePrefixed(stream: NodeJS.ReadableStream | null, tag: string): void {
-	if (!stream) return;
-	let buf = "";
-	stream.setEncoding("utf8");
-	stream.on("data", (chunk: string) => {
-		buf += chunk;
-		let i = buf.indexOf("\n");
-		while (i !== -1) {
-			process.stderr.write(`${tag}${buf.slice(0, i)}\n`);
-			buf = buf.slice(i + 1);
-			i = buf.indexOf("\n");
-		}
-	});
-	stream.on("end", () => {
-		if (buf.length > 0) process.stderr.write(`${tag}${buf}\n`);
-	});
-}
-
-/**
  * Like `run`, but buffers the child's stdout and returns it as a string
- * instead of forwarding it to the parent stderr. Stderr is still
- * line-tagged through the logger. Use for tools whose stdout is data
- * the caller needs to parse (e.g. `askalono crawl`'s JSON stream).
+ * instead of forwarding it to `output`. Stderr is still piped to `output`.
+ * Use for tools whose stdout is data the caller needs to parse (e.g.
+ * `askalono crawl`'s JSON stream).
  */
 export async function runCapture(
-	logger: Logger,
+	output: Writable,
 	cmd: string,
 	args: readonly string[],
 	options: RunOptions = {},
@@ -282,7 +241,7 @@ export async function runCapture(
 		child.stdout?.on("data", (chunk: string) => {
 			stdout += chunk;
 		});
-		pipePrefixed(child.stderr, `[${logger.prefix}] `);
+		child.stderr?.pipe(output);
 		child.once("error", rejectPromise);
 		child.once("close", (code) => {
 			if (code === 0) resolvePromise(stdout);
@@ -292,39 +251,6 @@ export async function runCapture(
 				);
 		});
 	});
-}
-
-/** Equivalent of `command -v` — returns true if the tool is on PATH. */
-export async function hasCommand(cmd: string): Promise<boolean> {
-	return await new Promise<boolean>((resolvePromise) => {
-		const child = spawn("which", [cmd], { stdio: "ignore" });
-		child.once("error", () => resolvePromise(false));
-		child.once("close", (code) => resolvePromise(code === 0));
-	});
-}
-
-/**
- * Run `fn` over `items` with at most `concurrency` in flight. Items start in
- * order but may complete out of order. An exception in one item does not
- * abort the pool; callers are responsible for catching and collecting
- * per-item results inside `fn`.
- */
-export async function runPool<T>(
-	items: readonly T[],
-	concurrency: number,
-	fn: (item: T, index: number) => Promise<void>,
-): Promise<void> {
-	const n = Math.min(Math.max(1, concurrency), items.length);
-	let next = 0;
-	await Promise.all(
-		Array.from({ length: n }, async () => {
-			while (true) {
-				const i = next++;
-				if (i >= items.length) return;
-				await fn(items[i]!, i);
-			}
-		}),
-	);
 }
 
 export function normalizeCSymbol(cSymbol: string | undefined, lang: string) {

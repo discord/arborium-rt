@@ -1,6 +1,7 @@
 // Typed reader for the arborium submodule's `langs/*/*/def/arborium.yaml`.
 
-import { type Dirent, readdirSync, readFileSync } from "node:fs";
+import type { Dirent } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import spdxSatisfies from "spdx-satisfies";
@@ -81,8 +82,8 @@ export interface QueryConfig {
 }
 
 /** Parse a single `arborium.yaml` file. Throws on malformed YAML. */
-export function readArboriumYaml(path: string): ArboriumYaml {
-	return (parseYaml(readFileSync(path, "utf8")) ?? {}) as ArboriumYaml;
+export async function readArboriumYaml(path: string): Promise<ArboriumYaml> {
+	return (parseYaml(await readFile(path, "utf8")) ?? {}) as ArboriumYaml;
 }
 
 /**
@@ -101,12 +102,12 @@ export interface GrammarIndexEntry {
 	readonly license: string | undefined;
 }
 
-export function buildGrammarIndex(
+export async function buildGrammarIndex(
 	roots: readonly string[],
-): Map<string, GrammarIndexEntry> {
+): Promise<Map<string, GrammarIndexEntry>> {
 	const index = new Map<string, GrammarIndexEntry>();
 	for (const root of roots) {
-		scanRoot(root, index);
+		await scanRoot(root, index);
 	}
 	return index;
 }
@@ -116,25 +117,25 @@ export function buildGrammarIndex(
  * shadow earlier ones on id collision, which lets a repo-local lang dir
  * override an arborium-vendored grammar with the same id.
  */
-function scanRoot(
+async function scanRoot(
 	langsRoot: string,
 	index: Map<string, GrammarIndexEntry>,
-): void {
+): Promise<void> {
 	let groups: Dirent[];
 	try {
-		groups = readdirSync(langsRoot, { withFileTypes: true });
+		groups = await readdir(langsRoot, { withFileTypes: true });
 	} catch {
 		return; // root doesn't exist (e.g. local langs not yet populated)
 	}
 	for (const group of groups) {
 		if (!group.isDirectory()) continue;
 		const groupPath = join(langsRoot, group.name);
-		for (const lang of readdirSync(groupPath, { withFileTypes: true })) {
+		for (const lang of await readdir(groupPath, { withFileTypes: true })) {
 			if (!lang.isDirectory()) continue;
 			const defPath = join(groupPath, lang.name, "def");
 			let doc: ArboriumYaml;
 			try {
-				doc = readArboriumYaml(join(defPath, "arborium.yaml"));
+				doc = await readArboriumYaml(join(defPath, "arborium.yaml"));
 			} catch {
 				continue; // non-def dir, or missing/unreadable yaml
 			}
