@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { Listr } from "listr2";
 import sade from "sade";
 import { applyPatches, bootstrap } from "./commands/bootstrap.ts";
-import { buildNode } from "./commands/build/node/index.ts";
 import { buildNodeGrammars } from "./commands/build/node/grammars.ts";
+import { buildNode } from "./commands/build/node/index.ts";
 import { buildGrammar } from "./commands/build/wasm/grammar.ts";
 import { buildAll } from "./commands/build/wasm/grammars.ts";
 import { buildWasmHost } from "./commands/build/wasm/host.ts";
@@ -49,9 +49,7 @@ prog
 	.option("--json", "emit the group list as a JSON array")
 	.action(async (opts) => {
 		const index = await buildGrammarIndex(paths().langsRoots);
-		const groups = [
-			...new Set([...index.values()].map((e) => e.group)),
-		].sort();
+		const groups = [...new Set([...index.values()].map((e) => e.group))].sort();
 		if (opts.json) {
 			process.stdout.write(`${JSON.stringify(groups)}\n`);
 		} else {
@@ -66,7 +64,9 @@ prog
 // lookup.
 prog
 	.command("build wasm")
-	.describe("build wasm-platform artifacts; pass `runtime`, `host`, or `grammar[s]`")
+	.describe(
+		"build wasm-platform artifacts; pass `runtime`, `host`, or `grammar[s]`",
+	)
 	.action(() => {
 		prog.help("build wasm");
 	});
@@ -87,7 +87,9 @@ prog
 
 prog
 	.command("build wasm grammars")
-	.describe("build + package every browser grammar in the corpus (default: all)")
+	.describe(
+		"build + package every browser grammar in the corpus (default: all)",
+	)
 	.option("--group", "only build grammars in this arborium group")
 	.example("build wasm grammars              # build every grammar")
 	.example("build wasm grammars json css     # build only these grammars")
@@ -109,17 +111,23 @@ prog
 
 prog
 	.command("build node")
-	.describe("link the Node addon from grammar sources staged by `build node grammars`")
+	.describe(
+		"link the Node addon (for the host platform) from grammar sources staged by `build node grammars`",
+	)
 	.action(async () => {
 		await buildNode().run();
 	});
 
 prog
 	.command("build node grammars")
-	.describe("stage Node grammar sources (parser.c + scanner + queries); link with `build node`")
+	.describe(
+		"stage Node grammar sources (parser.c + scanner + queries); link with `build node`",
+	)
 	.option("--group", "only stage grammars in this arborium group")
 	.example("build node grammars                    # stage every grammar")
-	.example("build node grammars json markdown      # restrict to these grammars")
+	.example(
+		"build node grammars json markdown      # restrict to these grammars",
+	)
 	.example("build node grammars --group group-acorn # one staging shard")
 	.action(async (opts) => {
 		const only = idsFilter(opts);

@@ -1,0 +1,26 @@
+{
+  "name": "@discord/arborium-rt-node-linux-arm64-gnu",
+  "version": "0.1.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "arborium-rt-node.linux-arm64-gnu.node",
+  "files": [
+    "arborium-rt-node.linux-arm64-gnu.node"
+  ],
+  "description": "Statically-linked tree-sitter + arborium runtime for Node.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/appellation/arborium-rt.git"
+  },
+  "libc": [
+    "glibc"
+  ]
+}

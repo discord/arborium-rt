@@ -1,23 +1,34 @@
 // Link the statically-linked Node native addon from already-staged grammar
-// sources (`build node`).
+// sources (`build node`), driving napi-rs's `napi build`.
 //
 // This is the linking half of the Node build; the staging half (`build node
 // grammars`, in build/node/grammars.ts) produces the per-grammar sources this
-// consumes. It assembles the publishable target artifact (`arborium-rt-node.node`)
-// from those already-built inputs. The cargo build targets the HOST triple via
-// CARGO_BUILD_TARGET (which also lands the artifact under the triple-prefixed
-// target dir). No build-std: the host build links the prebuilt std, and
-// `.cargo/config.toml` no longer pins build-std, so nothing needs clearing —
-// setting CARGO_UNSTABLE_BUILD_STD here would instead *enable* build-std with an
-// empty crate set and rebuild `core` (duplicate-lang-item link error). The
-// manifest path is handed to build.rs via ARBORIUM_RT_NODE_GRAMMARS. Finally
-// copies the produced cdylib to the npm package as `arborium-rt-node.node`.
+// consumes. It assembles the publishable native addon for the host platform.
+//
+// `napi build` wraps `cargo build` and then post-processes: it copies the
+// produced cdylib into the npm package as `arborium-rt-node.<platformArchABI>.node`
+// (basename from the package's `napi.name`), and regenerates the loader
+// `binding.cjs` + types `binding.d.cts` that `src/index.ts` imports. We then
+// move that `.node` into its per-platform sub-package dir, `npm/<platformArchABI>/`
+// — those dirs are pnpm workspace members the main package depends on via
+// `workspace:*` optionalDependencies, so the loader resolves the right binary
+// through normal node resolution (locally via the workspace symlink, in a
+// consumer install via the published per-platform package).
+//
+// We don't set CARGO_UNSTABLE_BUILD_STD: the host build links the prebuilt std,
+// and `.cargo/config.toml` no longer pins build-std, so nothing needs clearing —
+// setting it here would instead *enable* build-std with an empty crate set and
+// rebuild `core` (duplicate-lang-item link error). The grammar manifest path is
+// handed to lib/node/build.rs via ARBORIUM_RT_NODE_GRAMMARS.
 
-import { copyFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, rename } from "node:fs/promises";
+import { join, relative } from "node:path";
 import { Listr, type ListrTask } from "listr2";
 import { rebuildManifestFromStaged } from "../../../lib/node-manifest.ts";
-import { hostTriple, paths, run } from "../../../lib/util.ts";
+import { type paths, paths as resolvePaths, run } from "../../../lib/util.ts";
+
+/** `arborium-rt-node.<platformArchABI>.node` → capture the platformArchABI. */
+const ADDON_RE = /^arborium-rt-node\.(.+)\.node$/;
 
 /**
  * Link the statically-linked addon from grammar sources already staged under
@@ -26,7 +37,7 @@ import { hostTriple, paths, run } from "../../../lib/util.ts";
  * dirs, so it needs neither the tree-sitter CLI nor a manifest artifact.
  */
 export function buildNode() {
-	const p = paths();
+	const p = resolvePaths();
 
 	return new Listr([
 		{
@@ -35,50 +46,81 @@ export function buildNode() {
 				await rebuildManifestFromStaged(p);
 			},
 		},
-		...linkAddonTasks(p),
+		napiBuildTask(p),
+		stageAddonTask(p),
 	]);
 }
 
-/** cargo build for the host triple + copy the cdylib into the npm package. */
-function linkAddonTasks(p: ReturnType<typeof paths>): ListrTask[] {
-	return [
-		{
-			title: "building arborium-rt-node",
-			async task(_ctx, task) {
-				const manifest = join(p.nodeGrammarsOut, "manifest.json");
-				const triple = hostTriple();
-				task.output = `building arborium-rt-node for ${triple}`;
-				await run(
-					task.stdout(),
-					"cargo",
-					["build", "--release", "-p", "arborium-rt-node"],
-					{
-						cwd: p.repoRoot,
-						env: {
-							CARGO_BUILD_TARGET: triple,
-							ARBORIUM_RT_NODE_GRAMMARS: manifest,
-						},
-					},
-				);
-			},
-		},
-		{
-			title: "copying addon into the npm package",
-			async task() {
-				const triple = hostTriple();
-				const ext = process.platform === "darwin" ? "dylib" : "so";
-				const builtLib = join(
-					p.repoRoot,
-					"target",
-					triple,
-					"release",
-					`libarborium_rt_node.${ext}`,
-				);
+/** `napi build` for the host platform from the npm package dir. */
+function napiBuildTask(p: ReturnType<typeof paths>): ListrTask {
+	return {
+		title: "building arborium-rt-node",
+		async task(_ctx, task) {
+			const manifest = join(p.nodeGrammarsOut, "manifest.json");
+			// `napi build` runs from the npm package dir (so binding.cjs +
+			// the .node land there). --cargo-cwd is resolved relative to that
+			// cwd, so point it at lib/node with a relative path.
+			const cargoCwd = relative(
+				p.nodePackageDir,
+				join(p.repoRoot, "lib", "node"),
+			);
+			const napiBin = join(p.nodePackageDir, "node_modules", ".bin", "napi");
 
-				await mkdir(p.nodePackageDir, { recursive: true });
-				const dest = join(p.nodePackageDir, "arborium-rt-node.node");
-				await copyFile(builtLib, dest);
-			},
+			// `--platform` builds for (and names the artifact after) the runner's
+			// own platform — every CI matrix entry is a native runner, so there's
+			// no `--target`. It also respects `--js`/`--dts` to name the generated
+			// loader + types the wrapper imports.
+			task.output = "napi build --platform";
+			await run(
+				task.stdout(),
+				napiBin,
+				[
+					"build",
+					"--platform",
+					"--release",
+					"--cargo-cwd",
+					cargoCwd,
+					"--cargo-name",
+					"arborium_rt_node",
+					"--js",
+					"binding.cjs",
+					"--dts",
+					"binding.d.cts",
+				],
+				{
+					cwd: p.nodePackageDir,
+					env: { ARBORIUM_RT_NODE_GRAMMARS: manifest },
+				},
+			);
 		},
-	];
+	};
+}
+
+/**
+ * Move the freshly built `arborium-rt-node.<platformArchABI>.node` out of the
+ * main package dir and into its `npm/<platformArchABI>/` sub-package, whose
+ * `package.json` (committed, generated by `napi create-npm-dir`) declares the
+ * matching `main` + `os`/`cpu`/`libc`.
+ */
+function stageAddonTask(p: ReturnType<typeof paths>): ListrTask {
+	return {
+		title: "staging addon into its npm/<platform> sub-package",
+		async task(_ctx, task) {
+			const entries = await readdir(p.nodePackageDir);
+			const addons = entries.filter((f) => ADDON_RE.test(f));
+			if (addons.length === 0) {
+				throw new Error(
+					`napi build produced no arborium-rt-node.*.node in ${p.nodePackageDir}`,
+				);
+			}
+			for (const file of addons) {
+				const platform = ADDON_RE.exec(file)?.[1];
+				if (!platform) continue;
+				const destDir = join(p.nodePackageDir, "npm", platform);
+				await mkdir(destDir, { recursive: true });
+				await rename(join(p.nodePackageDir, file), join(destDir, file));
+				task.output = `staged ${file} → npm/${platform}/`;
+			}
+		},
+	};
 }

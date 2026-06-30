@@ -2,15 +2,29 @@
 // for Node.js. Every grammar's parser/scanner is compiled into the native
 // addon and every flattened query is baked in, so there is no wasm host and no
 // async grammar loading: just call `highlightToSpans(language, text)`.
+//
+// The native binding is the napi-rs-generated loader in `../binding.cjs` (built
+// by `arborium-rt build node`, which runs `napi build`). That loader picks the
+// correct `arborium-rt-node.<platform>.node` for the running platform from the
+// per-platform binaries the package bundles (the CI matrix builds one per
+// target). This module is the thin, friendly TypeScript wrapper over it: it
+// keeps the public `HtmlFormat` union (translated to the native numeric format
+// code) and wraps the native `Session` class, so the surface stays
+// interchangeable with `@discord/arborium-rt`.
 
-import { createRequire } from "node:module";
+import {
+	type HtmlOptions as NativeHtmlOptions,
+	Session as NativeSession,
+	availableLanguages as nativeAvailableLanguages,
+	highlightToHtmlString as nativeHighlightToHtmlString,
+	highlightToSpans as nativeHighlightToSpans,
+} from "../binding.cjs";
 
 import type {
 	HighlightHtmlResult,
 	HighlightOptions,
 	HighlightSpansResult,
 	HighlightToHtmlOptions,
-	HtmlFormat,
 	ParseResult,
 } from "./types.js";
 
@@ -26,62 +40,37 @@ export type {
 	ThemedSpan,
 } from "./types.js";
 
-/** Options passed to the native HTML entry points (numeric format code). */
-interface NativeHtmlOptions {
-	maxInjectionDepth?: number | undefined;
-	format?: number | undefined;
-	prefix?: string | undefined;
-}
-
-interface NativeSession {
-	setText(text: string): void;
-	parse(): ParseResult;
-	highlightToSpans(options: HighlightOptions): HighlightSpansResult;
-	highlightToHtml(options: NativeHtmlOptions): HighlightHtmlResult;
-	cancel(): void;
-	free(): void;
-}
-
-interface NativeAddon {
-	availableLanguages(): string[];
-	highlightToSpans(
-		language: string,
-		text: string,
-		maxInjectionDepth?: number,
-	): HighlightSpansResult;
-	highlightToHtmlString(
-		language: string,
-		text: string,
-		options?: NativeHtmlOptions,
-	): HighlightHtmlResult;
-	Session: new (language: string) => NativeSession;
-}
-
-// The compiled JS lives in dist/; `arborium-rt build-node` copies the native
-// addon to the package root next to dist/, so it's one level up.
-const require = createRequire(import.meta.url);
-const native = require("../arborium-rt-node.node") as NativeAddon;
-
-/** Translate the JS-facing `HtmlFormat` union into the native numeric code. */
-function encodeHtmlFormat(format?: HtmlFormat): {
-	format: number;
-	prefix?: string;
-} {
-	switch (format?.kind) {
-		case "custom-elements-with-prefix":
-			return { format: 1, prefix: format.prefix };
-		case "class-names":
-			return { format: 2 };
-		case "class-names-with-prefix":
-			return { format: 3, prefix: format.prefix };
-		default:
-			return { format: 0 };
+/**
+ * Translate the friendly `HighlightToHtmlOptions` into the native numeric
+ * `HtmlOptions` the addon expects. Keys are only set when defined, so the
+ * result satisfies the generated type under `exactOptionalPropertyTypes`.
+ */
+function nativeHtmlOptions(options: HighlightToHtmlOptions): NativeHtmlOptions {
+	const native: NativeHtmlOptions = {};
+	if (options.maxInjectionDepth !== undefined) {
+		native.maxInjectionDepth = options.maxInjectionDepth;
 	}
+	switch (options.format?.kind) {
+		case "custom-elements-with-prefix":
+			native.format = 1;
+			native.prefix = options.format.prefix;
+			break;
+		case "class-names":
+			native.format = 2;
+			break;
+		case "class-names-with-prefix":
+			native.format = 3;
+			native.prefix = options.format.prefix;
+			break;
+		default:
+			native.format = 0;
+	}
+	return native;
 }
 
 /** The ids of every grammar bundled in this addon, sorted. */
 export function availableLanguages(): string[] {
-	return native.availableLanguages();
+	return nativeAvailableLanguages();
 }
 
 /**
@@ -93,7 +82,7 @@ export function highlightToSpans(
 	text: string,
 	options: HighlightOptions = {},
 ): HighlightSpansResult {
-	return native.highlightToSpans(language, text, options.maxInjectionDepth);
+	return nativeHighlightToSpans(language, text, options.maxInjectionDepth);
 }
 
 /** One-shot: highlight `text` as `language` into a rendered HTML string. */
@@ -102,12 +91,11 @@ export function highlightToHtml(
 	text: string,
 	options: HighlightToHtmlOptions = {},
 ): HighlightHtmlResult {
-	const { format, prefix } = encodeHtmlFormat(options.format);
-	return native.highlightToHtmlString(language, text, {
-		maxInjectionDepth: options.maxInjectionDepth,
-		format,
-		prefix,
-	});
+	return nativeHighlightToHtmlString(
+		language,
+		text,
+		nativeHtmlOptions(options),
+	);
 }
 
 /**
@@ -120,7 +108,7 @@ export class Session {
 	#inner: NativeSession;
 
 	constructor(language: string) {
-		this.#inner = new native.Session(language);
+		this.#inner = new NativeSession(language);
 	}
 
 	setText(text: string): void {
@@ -136,12 +124,7 @@ export class Session {
 	}
 
 	highlightToHtml(options: HighlightToHtmlOptions = {}): HighlightHtmlResult {
-		const { format, prefix } = encodeHtmlFormat(options.format);
-		return this.#inner.highlightToHtml({
-			maxInjectionDepth: options.maxInjectionDepth,
-			format,
-			prefix,
-		});
+		return this.#inner.highlightToHtml(nativeHtmlOptions(options));
 	}
 
 	cancel(): void {

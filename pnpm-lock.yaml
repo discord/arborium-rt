@@ -44,7 +44,23 @@ importers:
         version: 3.2.4(@types/node@25.6.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)
 
   packages/arborium-rt-node:
+    optionalDependencies:
+      '@discord/arborium-rt-node-darwin-arm64':
+        specifier: workspace:*
+        version: link:npm/darwin-arm64
+      '@discord/arborium-rt-node-darwin-x64':
+        specifier: workspace:*
+        version: link:npm/darwin-x64
+      '@discord/arborium-rt-node-linux-arm64-gnu':
+        specifier: workspace:*
+        version: link:npm/linux-arm64-gnu
+      '@discord/arborium-rt-node-linux-x64-gnu':
+        specifier: workspace:*
+        version: link:npm/linux-x64-gnu
     devDependencies:
+      '@napi-rs/cli':
+        specifier: ^2
+        version: 2.18.4
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0
@@ -54,6 +70,14 @@ importers:
       vitest:
         specifier: ^3.0.5
         version: 3.2.4(@types/node@25.6.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3)
+
+  packages/arborium-rt-node/npm/darwin-arm64: {}
+
+  packages/arborium-rt-node/npm/darwin-x64: {}
+
+  packages/arborium-rt-node/npm/linux-arm64-gnu: {}
+
+  packages/arborium-rt-node/npm/linux-x64-gnu: {}
 
   packages/arborium-rt-wasm:
     devDependencies:
@@ -283,6 +307,11 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
+
+  '@napi-rs/cli@2.18.4':
+    resolution: {integrity: sha512-SgJeA4df9DE2iAEpr3M2H0OKl/yjtg1BnRI5/JyowS71tUWhrfSu2LT0V3vlHET+g1hBVlrO60PmEXwUEKp8Mg==}
+    engines: {node: '>= 10'}
+    hasBin: true
 
   '@rollup/rollup-android-arm-eabi@4.60.2':
     resolution: {integrity: sha512-dnlp69efPPg6Uaw2dVqzWRfAWRnYVb1XJ8CyyhIbZeaq4CA5/mLeZ1IEt9QqQxmbdvagjLIm2ZL8BxXv5lH4Yw==}
@@ -974,6 +1003,8 @@ snapshots:
     optional: true
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
+
+  '@napi-rs/cli@2.18.4': {}
 
   '@rollup/rollup-android-arm-eabi@4.60.2':
     optional: true

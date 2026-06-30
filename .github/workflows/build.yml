@@ -334,11 +334,13 @@ jobs:
   # ── Node packaging: link the native addon (per-platform matrix) ───────────
   # Downloads the platform-independent staged sources from `grammars-node`,
   # regenerates the manifest from them (`build node` — no tree-sitter CLI
-  # needed), then statically links every grammar into one `.node` for this matrix
-  # entry's target. Needs nightly Rust + a C/C++ compiler (preinstalled); NOT
-  # emcc, NOT the tree-sitter CLI. Today this matrix has one entry (linux/x64);
-  # adding macOS/Windows is just more entries — staging above is shared and never
-  # re-runs per platform.
+  # needed), then runs `napi build --platform` to statically link every grammar
+  # into one `arborium-rt-node.<platformArchABI>.node`. Needs nightly Rust + a
+  # C/C++ compiler (preinstalled); NOT emcc, NOT the tree-sitter CLI. Every entry
+  # runs on a NATIVE runner for its platform, so there is no cross toolchain and
+  # no `--target`: `--platform` builds for (and names the artifact after) the
+  # runner's own platform. Adding a platform is one more matrix entry — the
+  # staging above is shared and never re-runs per platform.
   package-node:
     needs: grammars-node
     strategy:
@@ -347,6 +349,12 @@ jobs:
         include:
           - platform: linux-x64
             runs-on: ubuntu-latest
+          - platform: linux-arm64
+            runs-on: ubuntu-24.04-arm
+          - platform: darwin-x64
+            runs-on: macos-13
+          - platform: darwin-arm64
+            runs-on: macos-14
     runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@v6
@@ -381,32 +389,41 @@ jobs:
       - name: Apply submodule patches
         run: ./scripts/arborium-rt apply-patches
 
+      # Builds the addon for this runner's native platform and stages it into
+      # its per-platform sub-package, packages/arborium-rt-node/npm/<platform>/.
+      # It also regenerates binding.cjs + binding.d.cts, which the next step's
+      # tsc needs to typecheck the wrapper.
       - name: Link Node native addon (${{ matrix.platform }})
         run: ./scripts/arborium-rt build node
 
       - name: Annotate addon size
+        shell: bash
         run: |
-          f=packages/arborium-rt-node/arborium-rt-node.node
-          bytes=$(stat -c %s "$f")
-          human=$(numfmt --to=iec-i --suffix=B --format='%.2f' "$bytes")
+          f=$(ls packages/arborium-rt-node/npm/*/arborium-rt-node.*.node)
+          bytes=$(wc -c < "$f")
           {
             echo "## Node addon size (${{ matrix.platform }})"
             echo ""
-            printf '`%s` — %s (%s bytes)\n' "$f" "$human" "$bytes"
+            printf '`%s` — %s bytes\n' "$f" "$bytes"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Upload the staged sub-package binary, preserving the npm/<platform>/
+      # path so a publish job can merge every matrix entry's artifact straight
+      # back into the workspace tree (the npm/<platform>/package.json is already
+      # committed, so only the .node travels).
       - name: Upload Node addon
         uses: actions/upload-artifact@v7
         with:
           name: node-addon-${{ matrix.platform }}
-          path: packages/arborium-rt-node/arborium-rt-node.node
+          path: packages/arborium-rt-node/npm/*/arborium-rt-node.*.node
           if-no-files-found: error
           retention-days: 7
 
-      # `test:ci` is `tsc && vitest run` — it tests the addon just linked above,
-      # WITHOUT the `pretest` re-stage (`build node grammars …`) the default
-      # `test` runs. Re-staging would need the tree-sitter CLI, which this job
-      # (and non-linux runners) deliberately don't have.
+      # `test:ci` is `tsc && vitest run` — it tests the addon just linked above
+      # (the runner's native binary, resolved through the npm/<platform>
+      # workspace package), WITHOUT the `pretest` re-stage (`build node grammars
+      # …`) the default `test` runs. Re-staging would need the tree-sitter CLI,
+      # which this job deliberately doesn't have.
       - name: Test Node addon package
         run: pnpm --filter @discord/arborium-rt-node run test:ci
 
@@ -496,8 +513,12 @@ jobs:
                 done
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Skip the Node addon package: its `tsc` build now imports the
+      # napi-generated `binding.cjs`/`binding.d.cts`, which only exist after a
+      # native `build node` (Rust + staged sources) — done in the package-node
+      # job, not here. The browser package + CLI build with no extra toolchain.
       - name: Build TypeScript packages
-        run: pnpm -r build
+        run: pnpm -r --filter='!@discord/arborium-rt-node' build
 
       # Only the browser package here. The Node addon package is built + tested
       # in the package-node job (it needs Rust + staged grammar sources, which this

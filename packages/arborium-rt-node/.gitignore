@@ -1,2 +1,6 @@
 dist/
+# Built native addons, including the ones napi build drops into npm/<platform>/.
+# The per-platform package.json under npm/ ARE committed (workspace members).
 *.node
+binding.cjs
+binding.d.cts

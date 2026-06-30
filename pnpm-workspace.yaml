@@ -1,3 +1,9 @@
 packages:
   - cli
   - "packages/*"
+  # Per-platform napi sub-packages (@discord/arborium-rt-node-<platform>). They
+  # carry os/cpu/libc + the prebuilt .node; the @discord/arborium-rt-node main
+  # package depends on them via `workspace:*` optionalDependencies, so pnpm
+  # resolves them locally — `--frozen-lockfile` works with nothing published.
+  # `pnpm publish` rewrites `workspace:*` to the real version at release time.
+  - "packages/arborium-rt-node/npm/*"

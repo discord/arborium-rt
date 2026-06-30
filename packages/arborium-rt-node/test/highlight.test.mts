@@ -119,11 +119,14 @@ it("resolves nested injections up to the depth limit", () => {
 });
 
 it("reports missing injections for unbundled fenced languages", () => {
-	// `python` isn't in the --only set, so a python fence's injection can't
-	// resolve and the language is reported as missing.
-	const src = ["```python", "x = 1", "```", ""].join("\n");
+	// A fenced info string that can never be a real grammar id: its injection
+	// can't resolve, so the language is reported as missing. (Using a sentinel
+	// keeps this robust whether the addon was linked with the small pretest set
+	// or the full corpus, as in CI's package-node matrix.)
+	const missing = "totally-not-a-real-language";
+	const src = [`\`\`\`${missing}`, "x = 1", "```", ""].join("\n");
 	const { missingInjections } = highlightToSpans("markdown", src, {
 		maxInjectionDepth: 2,
 	});
-	expect(missingInjections).toContain("python");
+	expect(missingInjections).toContain(missing);
 });
