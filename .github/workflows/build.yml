@@ -393,6 +393,20 @@ jobs:
       - name: Stage host + runtime wasms into dist/
         run: ./scripts/arborium-rt package host
 
+      # Shared by both `package grammars` (per-grammar `askalono crawl` over each
+      # already-downloaded grammar dir to identify its LICENSE/NOTICE files — a
+      # fast local scan, no network) and the THIRD_PARTY_NOTICES step below.
+      # Installed once; the action caches the built binary so warm runs are fast.
+      - name: Install askalono CLI
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: askalono-cli
+          version: "0.5.0"
+
+      # Stages each built grammar's wasm + flattened queries + attribution into
+      # dist/grammars/ and regenerates the grammars.ts index. THIRD_PARTY_NOTICES
+      # is generated separately below — it's the only step that clones every
+      # upstream over the network, so it doesn't gate the test run.
       - name: Package every grammar into dist/grammars/
         run: ./scripts/arborium-rt package grammars
 
@@ -424,12 +438,11 @@ jobs:
       - name: Run tests
         run: pnpm -r --filter='!@discord/arborium-rt-node' test
 
-      - name: Install askalono CLI
-        uses: baptiste0928/cargo-install@v3
-        with:
-          crate: askalono-cli
-          version: "0.5.0"
-
+      # Decoupled from `package grammars`: clones every upstream at its pinned
+      # commit and writes THIRD_PARTY_NOTICES into the runtime package's dist/
+      # (and the repo root) so the packed tarball ships it. Runs after the tests
+      # so the network-heavy clone pass doesn't delay test feedback, and before
+      # pack so dist/ contains the file. (askalono installed above.)
       - name: Regenerate THIRD_PARTY_NOTICES
         run: ./scripts/arborium-rt notices
 
