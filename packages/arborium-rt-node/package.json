@@ -22,17 +22,14 @@
 		"binding.d.cts"
 	],
 	"napi": {
-		"name": "arborium-rt-node",
-		"triples": {
-			"defaults": false,
-			"additional": [
-				"x86_64-apple-darwin",
-				"aarch64-apple-darwin",
-				"x86_64-unknown-linux-gnu",
-				"aarch64-unknown-linux-gnu",
-				"x86_64-pc-windows-msvc"
-			]
-		}
+		"binaryName": "arborium-rt-node",
+		"targets": [
+			"x86_64-apple-darwin",
+			"aarch64-apple-darwin",
+			"x86_64-unknown-linux-gnu",
+			"aarch64-unknown-linux-gnu",
+			"x86_64-pc-windows-msvc"
+		]
 	},
 	"scripts": {
 		"build": "tsc",
@@ -41,7 +38,6 @@
 		"test:ci": "tsc && vitest run"
 	},
 	"devDependencies": {
-		"@napi-rs/cli": "^2",
 		"@types/node": "^25.6.0",
 		"typescript": "^5.7.3",
 		"vitest": "^3.0.5"

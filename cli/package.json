@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@napi-rs/cli": "^3",
     "listr2": "^10.2.2",
     "ora": "^9.4.1",
     "sade": "^1.8.1",

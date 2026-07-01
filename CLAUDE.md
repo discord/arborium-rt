@@ -203,16 +203,25 @@ rather than loaded dynamically.
   The manifest model (`ManifestGrammar`, `manifestEntryFor`,
   `rebuildManifestFromStaged`) lives in `cli/src/lib/node-manifest.ts`, shared
   between the staging (`build node grammars`) and linking (`build node`) halves.
-- **Build invocation** (`cli/src/commands/build/node/index.ts`): runs
-  `@napi-rs/cli`'s `napi build --platform --release`. `--platform` builds for —
-  and names the artifact after — the runner's own platform, so there is no
-  `--target`: each CI matrix entry just runs on a native runner. napi wraps
-  `cargo build` for `arborium-rt-node` (`--cargo-cwd lib/node`,
-  `--cargo-name arborium_rt_node`), then post-processes: it copies the produced
+- **Build invocation** (`cli/src/commands/build/node/index.ts`): drives
+  `@napi-rs/cli` v3's **programmatic** `NapiCli().build({...})` API (imported as
+  a module — no `napi` bin subprocess, so nothing platform-specific about
+  launching it; the bin is a `.cmd` shim on Windows that Node can't spawn
+  without a shell). `platform: true` builds for — and names the artifact after —
+  the runner's own platform; without `target` that's the runner's own platform,
+  and each CI matrix entry just runs on a native runner. `build` wraps
+  `cargo build` for `arborium-rt-node` (`manifestPath` → `lib/node/Cargo.toml`,
+  `package: "arborium-rt-node"`), then post-processes: it copies the produced
   cdylib into the npm package as `arborium-rt-node.<platformArchABI>.node`
-  (basename from the package's `napi.name`) and regenerates the loader
-  `binding.cjs` + types `binding.d.cts` (`--js`/`--dts`) that
-  `packages/arborium-rt-node/src/index.ts` imports. The `build node` command
+  (basename from the config's `napi.binaryName`) and regenerates the loader
+  `binding.cjs` + types `binding.d.cts` (`jsBinding`/`dts`) that
+  `packages/arborium-rt-node/src/index.ts` imports. `outputDir` is pinned to the
+  npm package dir because v3 otherwise defaults it to the *crate* folder. The
+  Rust `napi`/`napi-derive` crates are **v3** to match: cli v3 collects
+  `#[napi]` type defs via `NAPI_TYPE_DEF_TMP_FOLDER` (a per-crate folder),
+  whereas napi-derive 2.x only emitted to the old single-file `TYPE_DEF_TMP_PATH`
+  — with the mismatch `binding.d.cts` comes out empty and `binding.cjs` isn't
+  regenerated. The `build node` command
   then *moves* that `.node` into its per-platform sub-package dir,
   `npm/<platformArchABI>/` (see Cross-platform below). No build-std — the host
   build links the prebuilt std, and since `.cargo/config.toml` no longer pins
@@ -225,8 +234,8 @@ rather than loaded dynamically.
   ignores it; `cargo build --workspace` would (wrongly) try to build both
   shims natively.
 - **Cross-platform (standard napi model).** `package.json`'s
-  `napi.triples.additional` lists the supported targets (darwin x64/arm64,
-  linux x64/arm64 — all gnu), and `napi create-npm-dir` generated one
+  `napi.targets` lists the supported target triples (darwin x64/arm64,
+  linux x64/arm64 — all gnu — and win32 x64 msvc), and `napi create-npm-dirs` generated one
   sub-package manifest per target under `packages/arborium-rt-node/npm/<platform>/`
   (`@discord/arborium-rt-node-<platform>`, each with `os`/`cpu`/`libc` + a
   `main` pointing at its `.node`). The `package-node` CI matrix builds one
@@ -397,7 +406,7 @@ bootstrap after bumping either submodule or tweaking a patch.
   `.scm`, written by `build node grammars`.
   `target/node-grammars/manifest.json` is the index `lib/node/build.rs` consumes.
 - `target/<triple>/release/libarborium_rt_node.{dylib,so}` — the native addon
-  for the host `<triple>`. `napi build` copies + renames it to
+  for the host `<triple>`. `NapiCli().build()` copies + renames it to
   `arborium-rt-node.<platformArchABI>.node` in the package dir, then `build node`
   moves it into its sub-package at
   `packages/arborium-rt-node/npm/<platformArchABI>/arborium-rt-node.<platformArchABI>.node`.
@@ -475,7 +484,7 @@ means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
 - **The Node addon is the parallel surface.** A new highlight capability
   usually wants both a `#[napi]` function/method in `lib/node/src/lib.rs`
   (driving the same `arborium_rt::*` calls) and a matching wrapper +
-  type in `packages/arborium-rt-node/src/{index,types}.ts`. `napi build`
+  type in `packages/arborium-rt-node/src/{index,types}.ts`. `NapiCli().build()`
   generates the JS loader + `.d.ts` from the macro (no `EXPORTED_FUNCTIONS`
   list) into `binding.cjs`/`binding.d.cts`, which the wrapper imports; rerun
   `build node` to regenerate them after changing the `#[napi]` surface. napi

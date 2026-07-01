@@ -1,0 +1,6 @@
+# Patches are `git format-patch` output consumed verbatim by `git apply`
+# during bootstrap. They MUST stay LF: on Windows runners (core.autocrlf=true)
+# a CRLF checkout turns each blank context line into a lone `\r`, which
+# `git apply` rejects as "corrupt patch".
+patches/** text eol=lf
+*.patch text eol=lf
