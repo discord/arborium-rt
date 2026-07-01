@@ -7,9 +7,12 @@ on:
   pull_request:
   workflow_call:
     outputs:
-      version:
-        description: arborium-rt-wasm version (from packages/arborium-rt-wasm/package.json)
-        value: ${{ jobs.package-wasm.outputs.version }}
+      wasm-version:
+        description: "@discord/arborium-rt-wasm version (from packages/arborium-rt-wasm/package.json)"
+        value: ${{ jobs.package-wasm.outputs.wasm-version }}
+      node-version:
+        description: "@discord/arborium-rt-node version (from packages/arborium-rt-node/package.json)"
+        value: ${{ jobs.package-wasm.outputs.node-version }}
       tarball-name:
         description: filename of the packed npm tarball
         value: ${{ jobs.package-wasm.outputs.tarball-name }}
@@ -464,7 +467,8 @@ jobs:
     needs: [host-wasm, runtime-wasm, grammars-wasm]
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.meta.outputs.version }}
+      wasm-version: ${{ steps.meta.outputs.wasm-version }}
+      node-version: ${{ steps.meta.outputs.node-version }}
       tarball-name: ${{ steps.pack.outputs.tarball }}
       tarball-artifact: ${{ steps.pack.outputs.artifact-name }}
     steps:
@@ -562,25 +566,30 @@ jobs:
       - name: Regenerate THIRD_PARTY_NOTICES
         run: ./scripts/arborium-rt notices
 
-      - name: Resolve version
+      # Both publishable packages are versioned independently; publish.yml picks
+      # one per run and qualifies the tag with the package name. Read both here so
+      # either version is available downstream without a second checkout.
+      - name: Resolve versions
         id: meta
         run: |
-          version=$(node -p "require('./packages/arborium-rt-wasm/package.json').version")
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          wasm_version=$(node -p "require('./packages/arborium-rt-wasm/package.json').version")
+          node_version=$(node -p "require('./packages/arborium-rt-node/package.json').version")
+          echo "wasm-version=${wasm_version}" >> "$GITHUB_OUTPUT"
+          echo "node-version=${node_version}" >> "$GITHUB_OUTPUT"
 
       - name: Pack tarball
         id: pack
         working-directory: packages/arborium-rt-wasm
         run: |
           pnpm pack --pack-destination "$GITHUB_WORKSPACE"
-          tarball="discord-arborium-rt-wasm-${{ steps.meta.outputs.version }}.tgz"
+          tarball="discord-arborium-rt-wasm-${{ steps.meta.outputs.wasm-version }}.tgz"
           if [ ! -f "$GITHUB_WORKSPACE/$tarball" ]; then
             echo "expected tarball not found: $tarball" >&2
             ls "$GITHUB_WORKSPACE" >&2
             exit 1
           fi
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
-          echo "artifact-name=arborium-rt-wasm-${{ steps.meta.outputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=arborium-rt-wasm-${{ steps.meta.outputs.wasm-version }}" >> "$GITHUB_OUTPUT"
 
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v7
