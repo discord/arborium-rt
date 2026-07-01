@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Namespace comes from `android.namespace` in build.gradle.kts; this library
+     declares no components or permissions of its own. -->
+<manifest />

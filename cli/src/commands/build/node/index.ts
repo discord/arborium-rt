@@ -1,9 +1,11 @@
 // Link the statically-linked Node native addon from already-staged grammar
 // sources (`build node`), driving napi-rs's `NapiCli().build()`.
 //
-// This is the linking half of the Node build; the staging half (`build node
-// grammars`, in build/node/grammars.ts) produces the per-grammar sources this
-// consumes. It assembles the publishable native addon for the host platform.
+// This is the linking half of the Node build; the shared staging step (`build
+// native grammars`, in build/native/grammars.ts) produces the per-grammar
+// sources this consumes. It assembles the publishable native addon for the host
+// platform. The grammar C is statically linked via the shared `lib/native`
+// crate (which `ffi/node` depends on), not this crate's own build.rs.
 //
 // We drive napi-rs's `NapiCli.build()` programmatic API (not the `napi` bin) —
 // no subprocess/shell, so nothing platform-specific about launching it (the bin
@@ -22,13 +24,13 @@
 // and `.cargo/config.toml` no longer pins build-std, so nothing needs clearing —
 // setting it here would instead *enable* build-std with an empty crate set and
 // rebuild `core` (duplicate-lang-item link error). The grammar manifest path is
-// handed to lib/node/build.rs via ARBORIUM_RT_NODE_GRAMMARS.
+// handed to lib/native/build.rs via ARBORIUM_RT_GRAMMARS.
 
 import { mkdir, readdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { NapiCli } from "@napi-rs/cli";
 import { Listr, type ListrTask } from "listr2";
-import { rebuildManifestFromStaged } from "../../../lib/node-manifest.ts";
+import { rebuildManifestFromStaged } from "../../../lib/native-manifest.ts";
 import { type paths, paths as resolvePaths } from "../../../lib/util.ts";
 
 /** `arborium-rt-node.<platformArchABI>.node` → capture the platformArchABI. */
@@ -36,9 +38,9 @@ const ADDON_RE = /^arborium-rt-node\.(.+)\.node$/;
 
 /**
  * Link the statically-linked addon from grammar sources already staged under
- * `nodeGrammarsOut` (e.g. produced by `build node grammars`, or downloaded from
- * the `grammars-node` matrix). Regenerates the manifest by scanning the staged
- * dirs, so it needs neither the tree-sitter CLI nor a manifest artifact.
+ * `nativeGrammarsOut` (e.g. produced by `build native grammars`, or downloaded
+ * from the `grammars-native` matrix). Regenerates the manifest by scanning the
+ * staged dirs, so it needs neither the tree-sitter CLI nor a manifest artifact.
  *
  * `target` cross-compiles for an explicit Rust target triple instead of the
  * host platform — used to build the darwin-x64 addon on an Apple Silicon
@@ -70,13 +72,13 @@ export function buildNode(target?: string) {
  * Rust triple (its std must already be installed). `platform` must stay even
  * when a `target` is set, or the platformArchABI suffix drops from the filename.
  *
- * v3 defaults `outputDir` to the *crate* folder (lib/node); we pin it to the
+ * v3 defaults `outputDir` to the *crate* folder (ffi/node); we pin it to the
  * npm package dir so `binding.cjs`/`binding.d.cts` + the `.node` land there
  * (where `src/index.ts` and `stageAddonTask` expect them). `package` is cargo's
- * `-p` (the crate to build); `manifestPath` points cargo at lib/node/Cargo.toml.
- * build.rs reads the grammar manifest from `ARBORIUM_RT_NODE_GRAMMARS`, which
- * cargo inherits from this process's env (the programmatic API takes no `env`),
- * so we set it here — this process's only job is the build.
+ * `-p` (the crate to build); `manifestPath` points cargo at ffi/node/Cargo.toml.
+ * `lib/native/build.rs` reads the grammar manifest from `ARBORIUM_RT_GRAMMARS`,
+ * which cargo inherits from this process's env (the programmatic API takes no
+ * `env`), so we set it here — this process's only job is the build.
  */
 function napiBuildTask(
 	p: ReturnType<typeof paths>,
@@ -85,15 +87,15 @@ function napiBuildTask(
 	return {
 		title: "building arborium-rt-node",
 		async task(_ctx, task) {
-			process.env.ARBORIUM_RT_NODE_GRAMMARS = join(
-				p.nodeGrammarsOut,
+			process.env.ARBORIUM_RT_GRAMMARS = join(
+				p.nativeGrammarsOut,
 				"manifest.json",
 			);
 			task.output = `napi build --platform${target ? ` --target ${target}` : ""}`;
 			const { task: build } = await new NapiCli().build({
 				cwd: p.nodePackageDir,
 				outputDir: p.nodePackageDir,
-				manifestPath: join(p.repoRoot, "lib", "node", "Cargo.toml"),
+				manifestPath: join(p.repoRoot, "ffi", "node", "Cargo.toml"),
 				package: "arborium-rt-node",
 				platform: true,
 				release: true,

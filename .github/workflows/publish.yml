@@ -10,24 +10,33 @@ on:
         options:
           - wasm
           - node
+          - android
         default: wasm
       tag:
         description: "Release tag (defaults to <package-name>@<version>)"
         required: false
         type: string
       dry-run:
-        description: "Build + pack + release, but skip npm publish"
+        description: "Build + pack + release, but skip npm/Maven publish"
         required: false
         type: boolean
         default: false
 
 jobs:
   # Reuse the parallelized build pipeline. It produces the runtime wasm,
-  # host wasm, every grammar, the per-platform Node addons, runs the test
-  # suite, and uploads both the packed `.tgz` and the `.node` binaries as
-  # artifacts this workflow consumes below — no rebuild here.
+  # host wasm, every grammar, the per-platform Node addons, the Android AAR,
+  # runs the test suite, and uploads the packed `.tgz`, the `.node` binaries,
+  # and the `.aar` as artifacts this workflow consumes below — no rebuild here.
+  #
+  # For an android release (and not a dry-run) we also flip `publish-android`,
+  # which lets build.yml's package-android job `gradle publish` the AAR to Maven
+  # from the job that built it (it has the .so's + gradle env). secrets: inherit
+  # passes GITHUB_TOKEN through for the GitHub Packages push.
   build:
     uses: ./.github/workflows/build.yml
+    secrets: inherit
+    with:
+      publish-android: ${{ inputs.package == 'android' && !inputs.dry-run }}
 
   publish:
     needs: build
@@ -70,6 +79,17 @@ jobs:
           find node-addons-raw -name '*.node' -exec mv {} node-addons/ \;
           ls -l node-addons
 
+      # ── android release asset ──────────────────────────────────────────────
+      # The AAR built by build.yml's package-android job. It's already been
+      # published to Maven there (unless dry-run); we attach it to the GitHub
+      # release too, matching the convention for the other targets' binaries.
+      - name: Download Android AAR
+        if: ${{ inputs.package == 'android' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: android-aar
+          path: android-aar
+
       # Independent versioning: the tag is qualified with the package name so the
       # wasm (arborium-rt-wasm@X.Y.Z) and node (arborium-rt-node@A.B.C) lineages
       # never collide, even when the two version numbers coincide. The `tag` input
@@ -80,6 +100,9 @@ jobs:
           if [ "${{ inputs.package }}" = "node" ]; then
             name="arborium-rt-node"
             version="${{ needs.build.outputs.node-version }}"
+          elif [ "${{ inputs.package }}" = "android" ]; then
+            name="arborium-rt-android"
+            version="${{ needs.build.outputs.android-version }}"
           else
             name="arborium-rt-wasm"
             version="${{ needs.build.outputs.wasm-version }}"
@@ -122,6 +145,18 @@ jobs:
 
           > Node native addons attached. This package is distributed via the attached
           > \`.node\` binaries; npm publish is not automated for it."
+          elif [ "${{ inputs.package }}" = "android" ]; then
+            assets=(android-aar/*.aar)
+            if [ "${{ inputs.dry-run }}" = "true" ]; then
+              notes="${notes}
+
+          > dry-run: the AAR is attached but was NOT published to Maven."
+            else
+              notes="${notes}
+
+          > Android AAR published to Maven as \`com.discord:arborium-rt-android:${{ steps.meta.outputs.version }}\`
+          > (also attached here). Add the repo to your build.gradle and depend on it."
+            fi
           else
             assets=("${{ needs.build.outputs.tarball-name }}")
             if [ "${{ steps.publish.outcome }}" = "failure" ]; then

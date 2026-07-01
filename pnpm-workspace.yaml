@@ -1,6 +1,9 @@
 packages:
   - cli
   - "packages/*"
+  # arborium-rt-android is a Gradle library module (AAR), not an npm package —
+  # keep pnpm from treating it as a workspace member.
+  - "!packages/arborium-rt-android"
   # Per-platform napi sub-packages (@discord/arborium-rt-node-<platform>). They
   # carry os/cpu/libc + the prebuilt .node; the @discord/arborium-rt-node main
   # package depends on them via `workspace:*` optionalDependencies, so pnpm

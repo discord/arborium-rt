@@ -276,8 +276,9 @@ cd arborium-rt
 ./scripts/arborium-rt build wasm runtime   # arborium_rt_wasm.wasm (SIDE_MODULE)
 ./scripts/arborium-rt build wasm host      # web-tree-sitter.{wasm,mjs}
 ./scripts/arborium-rt build wasm grammars  # build all grammars (browser)
-./scripts/arborium-rt build node grammars  # stage Node addon grammar sources
+./scripts/arborium-rt build native grammars # stage grammar sources (shared by node + android)
 ./scripts/arborium-rt build node           # link the statically-linked Node addon
+./scripts/arborium-rt build android        # cross-compile the Android .so per ABI + AAR (needs NDK)
 pnpm install && pnpm -r build && pnpm -r test
 ```
 

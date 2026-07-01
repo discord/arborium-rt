@@ -6,6 +6,12 @@ on:
       - main
   pull_request:
   workflow_call:
+    inputs:
+      publish-android:
+        description: "Also publish the Android AAR to the configured Maven repo (used by publish.yml)"
+        required: false
+        type: boolean
+        default: false
     outputs:
       wasm-version:
         description: "@discord/arborium-rt-wasm version (from packages/arborium-rt-wasm/package.json)"
@@ -13,6 +19,9 @@ on:
       node-version:
         description: "@discord/arborium-rt-node version (from packages/arborium-rt-node/package.json)"
         value: ${{ jobs.package-wasm.outputs.node-version }}
+      android-version:
+        description: "arborium-rt-android AAR version (from packages/arborium-rt-android/gradle.properties)"
+        value: ${{ jobs.package-android.outputs.android-version }}
       tarball-name:
         description: filename of the packed npm tarball
         value: ${{ jobs.package-wasm.outputs.tarball-name }}
@@ -26,7 +35,7 @@ concurrency:
 
 # `hostTriple()` in cli/src/lib/util.ts: the patched tree-sitter CLI lives at
 # this path on a linux x64 runner. The `tree-sitter-cli` job uploads it here;
-# the `grammars-wasm` and `grammars-node` matrices download it back.
+# the `grammars-wasm` and `grammars-native` matrices download it back.
 env:
   TREE_SITTER_BIN_DIR: third_party/tree-sitter/target/x86_64-unknown-linux-gnu/release
 
@@ -273,14 +282,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # ── Node grammar staging (per-group fan-out, platform-independent) ────────
-  # `build node grammars` → parser.c + scanner + flattened queries for each
+  # ── Native grammar staging (per-group fan-out, platform-independent) ──────
+  # `build native grammars` → parser.c + scanner + flattened queries for each
   # grammar. The output is plain source, identical for every target platform, so
-  # it's staged ONCE here and reused by every per-platform link job below.
-  # Sharded per arborium group (like grammars-wasm) so the heavy generates spread
-  # across runners instead of OOM-ing one. Needs the patched tree-sitter CLI
-  # (from `tree-sitter-cli`) + node; NOT Rust, NOT emcc.
-  grammars-node:
+  # it's staged ONCE here and reused by every statically-linked target's link job
+  # below (Node addon + Android AAR). Sharded per arborium group (like
+  # grammars-wasm) so the heavy generates spread across runners instead of
+  # OOM-ing one. Needs the patched tree-sitter CLI (from `tree-sitter-cli`) +
+  # node; NOT Rust, NOT emcc.
+  grammars-native:
     needs: tree-sitter-cli
     runs-on: ubuntu-latest
     strategy:
@@ -318,24 +328,24 @@ jobs:
         run: ./scripts/arborium-rt apply-patches
 
       - name: Stage grammars in ${{ matrix.group }}
-        run: ./scripts/arborium-rt build node grammars --group ${{ matrix.group }}
+        run: ./scripts/arborium-rt build native grammars --group ${{ matrix.group }}
 
       # Upload the staged sources only. Each shard writes its own manifest.json
-      # covering just this group; the link job regenerates a complete manifest by
+      # covering just this group; the link jobs regenerate a complete manifest by
       # scanning the merged dirs, so the per-shard manifest is excluded to avoid
       # cross-shard filename collisions on download.
       - name: Upload staged grammar sources
         uses: actions/upload-artifact@v7
         with:
-          name: grammars-node-${{ matrix.group }}
+          name: grammars-native-${{ matrix.group }}
           path: |
-            target/node-grammars/
-            !target/node-grammars/manifest.json
+            target/native-grammars/
+            !target/native-grammars/manifest.json
           if-no-files-found: error
           retention-days: 7
 
   # ── Node packaging: link the native addon (per-platform matrix) ───────────
-  # Downloads the platform-independent staged sources from `grammars-node`,
+  # Downloads the platform-independent staged sources from `grammars-native`,
   # regenerates the manifest from them (`build node` — no tree-sitter CLI
   # needed), then runs `napi build --platform` to statically link every grammar
   # into one `arborium-rt-node.<platformArchABI>.node`. Needs nightly Rust + a
@@ -345,7 +355,7 @@ jobs:
   # runner's own platform. Adding a platform is one more matrix entry — the
   # staging above is shared and never re-runs per platform.
   package-node:
-    needs: grammars-node
+    needs: grammars-native
     strategy:
       fail-fast: false
       matrix:
@@ -404,12 +414,12 @@ jobs:
       - name: Download staged grammar sources
         uses: actions/download-artifact@v8
         with:
-          pattern: grammars-node-*
-          path: target/node-grammars
+          pattern: grammars-native-*
+          path: target/native-grammars
           merge-multiple: true
 
       # Renders the arborium crates' Cargo.toml that arborium-rt-node depends on.
-      # No tree-sitter CLI build — staging already ran in grammars-node.
+      # No tree-sitter CLI build — staging already ran in grammars-native.
       - name: Apply submodule patches
         run: ./scripts/arborium-rt apply-patches
 
@@ -446,9 +456,9 @@ jobs:
 
       # `test:ci` is `tsc && vitest run` — it tests the addon just linked above
       # (the runner's native binary, resolved through the npm/<platform>
-      # workspace package), WITHOUT the `pretest` re-stage (`build node grammars
-      # …`) the default `test` runs. Re-staging would need the tree-sitter CLI,
-      # which this job deliberately doesn't have.
+      # workspace package), WITHOUT the `pretest` re-stage (`build native
+      # grammars …`) the default `test` runs. Re-staging would need the
+      # tree-sitter CLI, which this job deliberately doesn't have.
       #
       # Skipped for cross-compiled entries (matrix.target): the runner can't
       # load a foreign-arch addon (e.g. an x86_64 .node on the arm64 runner).
@@ -457,6 +467,115 @@ jobs:
       - name: Test Node addon package
         if: ${{ !matrix.target }}
         run: pnpm --filter @discord/arborium-rt-node run test:ci
+
+  # ── Android packaging: cross-compile the JNI shim + assemble the AAR ──────
+  # Downloads the same platform-independent staged sources as package-node, then
+  # cross-compiles ffi/android for every Android ABI with cargo-ndk (a single
+  # Linux host builds all ABIs against the NDK sysroot — no per-ABI runner) and
+  # assembles the release AAR with the Android Gradle plugin. Needs nightly Rust
+  # + the four Android target stds (prebuilt, no build-std), the Android NDK,
+  # cargo-ndk, and JDK + Gradle. NOT emcc, NOT the tree-sitter CLI.
+  package-android:
+    needs: grammars-native
+    runs-on: ubuntu-latest
+    # packages: write lets the conditional Maven-publish step push to GitHub
+    # Packages when publish.yml sets `publish-android`. Harmless on push/PR runs,
+    # where the publish step is gated off.
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      android-version: ${{ steps.meta.outputs.android-version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      # A single-file NDK install; `build android`'s cargo-ndk reads ANDROID_NDK_HOME.
+      - name: Install Android NDK
+        run: |
+          sdkmanager "ndk;26.3.11579264"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+
+      # Puts `gradle` on PATH (the AAR package has no committed wrapper); the
+      # assembleRelease step in `build android` falls back to it.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Install cargo-ndk
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-ndk
+          version: "3.5.4"
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Download staged grammar sources
+        uses: actions/download-artifact@v8
+        with:
+          pattern: grammars-native-*
+          path: target/native-grammars
+          merge-multiple: true
+
+      # Renders the arborium crates' Cargo.toml that ffi/android depends on.
+      # No tree-sitter CLI build — staging already ran in grammars-native.
+      - name: Apply submodule patches
+        run: ./scripts/arborium-rt apply-patches
+
+      # cargo-ndk cross-compiles libarborium_rt.so for every ABI into the AAR
+      # package's jniLibs/, then gradle assembleRelease bundles them into the AAR.
+      - name: Build Android .so per ABI + assemble AAR
+        run: ./scripts/arborium-rt build android
+
+      - name: Resolve Android version
+        id: meta
+        run: |
+          v=$(grep -E '^VERSION_NAME=' packages/arborium-rt-android/gradle.properties | cut -d= -f2)
+          echo "android-version=${v}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload AAR
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-aar
+          path: packages/arborium-rt-android/build/outputs/aar/*.aar
+          if-no-files-found: error
+          retention-days: 7
+
+      # Publish the AAR to the configured Maven repo (GitHub Packages by default;
+      # override with ARBORIUM_MAVEN_URL/_USER/_TOKEN for an internal repo) so a
+      # private build.gradle at Discord can resolve com.discord:arborium-rt-android.
+      # Only fires when publish.yml requests it; the assembleRelease above already
+      # ran, so `publish` reuses the up-to-date AAR. GITHUB_ACTOR is auto-set.
+      - name: Publish AAR to Maven
+        if: ${{ inputs.publish-android }}
+        working-directory: packages/arborium-rt-android
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gradle publish
 
   # ── Browser target: assemble + test + pack the npm package ────────────────
   # Aggregator: merge every group's grammar wasms, stage the host + runtime
@@ -554,7 +673,7 @@ jobs:
 
       # Only the browser package here. The Node addon package is built + tested
       # in the package-node job (it needs Rust + staged grammar sources, which this
-      # job doesn't set up); its `pretest` runs `build node grammars` + `build
+      # job doesn't set up); its `pretest` runs `build native grammars` + `build
       # node`, so it must not fire here. The CLI's own unit tests run alongside
       # (no extra toolchain).
       - name: Run tests

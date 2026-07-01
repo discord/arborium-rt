@@ -1,6 +1,6 @@
 // Target-agnostic grammar staging helpers, shared by the wasm SIDE_MODULE
-// build (`build-grammar.ts`) and the statically-linked Node addon build
-// (`build-node-grammars.ts`). None of these touch emcc or the linker — they
+// build (`build/wasm/grammar.ts`) and the statically-linked native-target build
+// (`build/native/grammars.ts`). None of these touch emcc or the linker — they
 // only stage source so `tree-sitter generate` can run and a scanner's
 // `#include`s resolve.
 

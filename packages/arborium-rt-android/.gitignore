@@ -1,0 +1,7 @@
+# Cross-compiled native libs, staged by `arborium-rt build android` (cargo-ndk).
+/src/main/jniLibs/
+
+# Gradle build output.
+/build/
+/.gradle/
+*.aar

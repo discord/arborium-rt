@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { Listr } from "listr2";
 import sade from "sade";
 import { applyPatches, bootstrap } from "./commands/bootstrap.ts";
-import { buildNodeGrammars } from "./commands/build/node/grammars.ts";
+import { buildAndroid } from "./commands/build/android/index.ts";
+import { buildNativeGrammars } from "./commands/build/native/grammars.ts";
 import { buildNode } from "./commands/build/node/index.ts";
 import { buildGrammar } from "./commands/build/wasm/grammar.ts";
 import { buildAll } from "./commands/build/wasm/grammars.ts";
@@ -109,10 +110,44 @@ prog
 		await new Listr(buildGrammar({ group, lang })).run();
 	});
 
+// Parent group for the native-target build subcommands, mirroring `build wasm`
+// above: gives `build native` a help landing. The shared staging step
+// (`build native grammars`) feeds every statically-linked target (Node addon,
+// Android AAR, …); the per-target link steps are `build node` / `build android`.
+prog
+	.command("build native")
+	.describe(
+		"build native-target artifacts; `grammars` stages the shared grammar sources",
+	)
+	.action(() => {
+		prog.help("build native");
+	});
+
+prog
+	.command("build native grammars")
+	.describe(
+		"stage native grammar sources (parser.c + scanner + queries); link with `build node` / `build android`",
+	)
+	.option("--group", "only stage grammars in this arborium group")
+	.example("build native grammars                    # stage every grammar")
+	.example(
+		"build native grammars json markdown      # restrict to these grammars",
+	)
+	.example("build native grammars --group group-acorn # one staging shard")
+	.action(async (opts) => {
+		const only = idsFilter(opts);
+		await new Listr(
+			buildNativeGrammars({
+				...(only ? { only } : {}),
+				...(opts.group ? { group: String(opts.group) } : {}),
+			}),
+		).run();
+	});
+
 prog
 	.command("build node")
 	.describe(
-		"link the Node addon (for the host platform) from grammar sources staged by `build node grammars`",
+		"link the Node addon (for the host platform) from grammar sources staged by `build native grammars`",
 	)
 	.option(
 		"--target",
@@ -127,24 +162,24 @@ prog
 	});
 
 prog
-	.command("build node grammars")
+	.command("build android")
 	.describe(
-		"stage Node grammar sources (parser.c + scanner + queries); link with `build node`",
+		"cross-compile ffi/android per ABI (needs ANDROID_NDK_HOME + cargo-ndk) and stage the .so into the AAR package's jniLibs/, from sources staged by `build native grammars`",
 	)
-	.option("--group", "only stage grammars in this arborium group")
-	.example("build node grammars                    # stage every grammar")
-	.example(
-		"build node grammars json markdown      # restrict to these grammars",
+	.option(
+		"--abi",
+		"only build these Android ABIs (comma-separated: arm64-v8a,armeabi-v7a,x86_64,x86)",
 	)
-	.example("build node grammars --group group-acorn # one staging shard")
+	.example("build android                        # build every ABI")
+	.example("build android --abi arm64-v8a,x86_64 # restrict to these ABIs")
 	.action(async (opts) => {
-		const only = idsFilter(opts);
-		await new Listr(
-			buildNodeGrammars({
-				...(only ? { only } : {}),
-				...(opts.group ? { group: String(opts.group) } : {}),
-			}),
-		).run();
+		const abis = opts.abi
+			? String(opts.abi)
+					.split(",")
+					.map((s) => s.trim())
+					.filter(Boolean)
+			: undefined;
+		await buildAndroid(abis ? { abis } : {}).run();
 	});
 
 prog

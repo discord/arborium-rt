@@ -1,0 +1,18 @@
+[package]
+name = "arborium-rt-native"
+version = "0.1.0"
+edition = "2024"
+description = "Shared native core: statically links every arborium grammar and registers them into the runtime, for consumption by the per-target FFI shims (ffi/node, ffi/android, …)"
+license = "MIT"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+arborium-rt = { path = "../.." }
+arborium-tree-sitter = { path = "../../third_party/arborium/crates/arborium-tree-sitter" }
+
+[build-dependencies]
+cc = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

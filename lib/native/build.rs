@@ -1,12 +1,17 @@
-//! Statically link every staged grammar into the addon.
+//! Statically link every staged grammar into this crate (and, transitively,
+//! into whichever cdylib depends on it — `ffi/node`, `ffi/android`, …).
 //!
-//! Reads the manifest written by `arborium-rt build-node-grammars`
-//! (path via `ARBORIUM_RT_NODE_GRAMMARS`, defaulting to
-//! `<repo>/target/node-grammars/manifest.json`), `cc`-compiles each grammar's
-//! `parser.c` (+ optional scanner) into the addon, and generates
+//! Reads the manifest written by `arborium-rt build native grammars` (path via
+//! `ARBORIUM_RT_GRAMMARS`, falling back to the legacy `ARBORIUM_RT_NODE_GRAMMARS`,
+//! then to `<repo>/target/native-grammars/manifest.json`), `cc`-compiles each
+//! grammar's `parser.c` (+ optional scanner), and generates
 //! `$OUT_DIR/grammar_table.rs` — an `extern "C"` block declaring every
 //! `tree_sitter_<cSymbol>()` plus a `GRAMMARS` table whose flattened `.scm`
 //! contents are `include_str!`'d (baked into the binary, no runtime fs reads).
+//!
+//! The `cargo:rustc-link-lib=static=…` directives `cc` emits here propagate to
+//! any cdylib that depends on this rlib, so the FFI shims don't run their own
+//! grammar build — they just call [`arborium_rt_native::register_all`].
 
 use std::env;
 use std::fs;
@@ -34,21 +39,20 @@ struct Grammar {
 }
 
 fn main() {
-    napi_build::setup();
-
     let manifest_path = manifest_path();
     println!("cargo:rerun-if-changed={}", manifest_path.display());
+    println!("cargo:rerun-if-env-changed=ARBORIUM_RT_GRAMMARS");
     println!("cargo:rerun-if-env-changed=ARBORIUM_RT_NODE_GRAMMARS");
 
     let raw = fs::read_to_string(&manifest_path).unwrap_or_else(|e| {
         panic!(
             "failed to read grammar manifest {}: {e}\n\
-             run `./scripts/arborium-rt build-node-grammars` first",
+             run `./scripts/arborium-rt build native grammars` first",
             manifest_path.display()
         )
     });
     let manifest: Manifest = serde_json::from_str(&raw).expect("invalid grammar manifest json");
-    // The node-grammars root: source/query paths in the manifest are relative
+    // The native-grammars root: source/query paths in the manifest are relative
     // to the directory holding manifest.json.
     let root = manifest_path.parent().expect("manifest has a parent").to_path_buf();
 
@@ -143,10 +147,13 @@ fn sanitize(id: &str) -> String {
 }
 
 fn manifest_path() -> PathBuf {
+    if let Ok(p) = env::var("ARBORIUM_RT_GRAMMARS") {
+        return PathBuf::from(p);
+    }
     if let Ok(p) = env::var("ARBORIUM_RT_NODE_GRAMMARS") {
         return PathBuf::from(p);
     }
-    // lib/node -> repo root is two levels up.
+    // lib/native -> repo root is two levels up.
     PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join("../../target/node-grammars/manifest.json")
+        .join("../../target/native-grammars/manifest.json")
 }

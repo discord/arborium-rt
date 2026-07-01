@@ -1,17 +1,17 @@
-// Stage the statically-linked Node addon's grammar sources (`build node
+// Stage the statically-linked native targets' grammar sources (`build native
 // grammars`).
 //
 // For each grammar it runs `tree-sitter generate` (sparse-only), snapshots the
 // generated `src/` + flattened queries into a persistent per-grammar dir, and
-// records a manifest entry. The linking half (`build node`, in
-// build/node/index.ts) consumes those staged sources — it needs neither the
-// tree-sitter CLI nor emcc, just a C/C++ compiler. The shared manifest model
-// lives in lib/node-manifest.ts.
+// records a manifest entry. The linking halves (`build node` / `build android`,
+// in build/node/index.ts and build/android/index.ts) consume those staged
+// sources — they need neither the tree-sitter CLI nor emcc, just a C/C++
+// (or NDK) compiler. The shared manifest model lives in lib/native-manifest.ts.
 
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { availableParallelism, totalmem } from "node:os";
 import { join } from "node:path";
-import { type ListrTask } from "listr2";
+import type { ListrTask } from "listr2";
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,
@@ -20,7 +20,7 @@ import { flattenAllIntoDir } from "../../../lib/flatten.ts";
 import {
 	type ManifestGrammar,
 	manifestEntryFor,
-} from "../../../lib/node-manifest.ts";
+} from "../../../lib/native-manifest.ts";
 import {
 	copySupportFiles,
 	stageGrammarSource,
@@ -34,9 +34,9 @@ import { normalizeCSymbol, paths, run } from "../../../lib/util.ts";
  * `tree-sitter generate` for the largest grammars (verilog, typescript, lean,
  * cobol, …) can each spike to several GB while it builds the full parse table.
  * Unlike the wasm build — which is sharded one arborium group per runner, so big
- * grammars rarely coincide — the node addon stages the whole corpus on a single
- * runner, so a cluster of big grammars generating at once will OOM-kill the
- * runner (it dies with SIGTERM / exit 143 mid-staging). Reserve ~6 GiB of
+ * grammars rarely coincide — the native targets stage the whole corpus on a
+ * single runner, so a cluster of big grammars generating at once will OOM-kill
+ * the runner (it dies with SIGTERM / exit 143 mid-staging). Reserve ~6 GiB of
  * headroom per concurrent generate so memory, not just cpu count, caps the pool.
  */
 function stagingConcurrency(): number {
@@ -45,28 +45,28 @@ function stagingConcurrency(): number {
 	return Math.max(1, Math.min(availableParallelism(), byMemory));
 }
 
-export interface BuildNodeGrammarsArgs {
+export interface BuildNativeGrammarsArgs {
 	/** Restrict to these grammar ids (dev loop). */
 	only?: readonly string[];
 	/** Restrict to one arborium group (drives the per-group staging matrix). */
 	group?: string;
 }
 
-interface BuildNodeGrammarsContext {
+interface BuildNativeGrammarsContext {
 	index: Map<string, GrammarIndexEntry>;
 	built: ManifestGrammar[];
 }
 
-interface BuildSingleGrammarContext extends BuildNodeGrammarsContext {
+interface BuildSingleGrammarContext extends BuildNativeGrammarsContext {
 	defDir: string;
 	langOut: string;
 	buildDir: string;
 	cSymbol: string;
 }
 
-export function buildNodeGrammars(
-	args: BuildNodeGrammarsArgs = {},
-): ListrTask<BuildNodeGrammarsContext>[] {
+export function buildNativeGrammars(
+	args: BuildNativeGrammarsArgs = {},
+): ListrTask<BuildNativeGrammarsContext>[] {
 	const p = paths();
 
 	return [
@@ -87,7 +87,7 @@ export function buildNodeGrammars(
 					ids = ids.filter((id) => ctx.index.get(id)?.group === args.group);
 				}
 
-				await mkdir(p.nodeGrammarsOut, { recursive: true });
+				await mkdir(p.nativeGrammarsOut, { recursive: true });
 
 				return task.newListr(
 					ids.map((id) => ({
@@ -120,7 +120,7 @@ export function buildNodeGrammars(
 			async task(ctx) {
 				ctx.built.sort((a, b) => a.id.localeCompare(b.id));
 				await writeFile(
-					join(p.nodeGrammarsOut, "manifest.json"),
+					join(p.nativeGrammarsOut, "manifest.json"),
 					`${JSON.stringify({ grammars: ctx.built }, null, 2)}\n`,
 				);
 			},
@@ -140,7 +140,7 @@ function stageOne(
 				ctx.defDir = entry.defPath;
 				ctx.cSymbol = normalizeCSymbol(entry.grammar.c_symbol, id);
 
-				ctx.langOut = join(p.nodeGrammarsOut, id);
+				ctx.langOut = join(p.nativeGrammarsOut, id);
 				ctx.buildDir = join(ctx.langOut, "build");
 				await rm(ctx.buildDir, { recursive: true, force: true });
 				// Pre-create src/ so grammar.js prelude scripts that emit cwd-relative

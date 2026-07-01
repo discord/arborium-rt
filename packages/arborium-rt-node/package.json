@@ -34,7 +34,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "pretest": "../../scripts/arborium-rt build node grammars json markdown markdown_inline html css javascript && ../../scripts/arborium-rt build node && tsc",
+    "pretest": "../../scripts/arborium-rt build native grammars json markdown markdown_inline html css javascript && ../../scripts/arborium-rt build node && tsc",
     "test": "vitest run",
     "test:ci": "tsc && vitest run"
   },

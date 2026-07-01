@@ -6,13 +6,16 @@ description = "Shared arborium plugin runtime packaged as an emscripten SIDE_MOD
 license = "MIT"
 
 [workspace]
-members = ["lib/wasm", "lib/node"]
+members = ["lib/wasm", "lib/native", "ffi/node", "ffi/android"]
 # A bare `cargo build` builds only the target-agnostic core `arborium-rt`
-# rlib, natively. The deployable shims are per-target and must NOT be built by
-# default — `lib/wasm` only links for emscripten and `lib/node` needs a staged
-# grammar manifest. Build each explicitly:
-#   ./scripts/arborium-rt build-runtime   # arborium-rt-wasm SIDE_MODULE
-#   ./scripts/arborium-rt build-node      # arborium-rt-node addon
+# rlib, natively. `lib/native` is the shared static-grammar core the FFI shims
+# depend on. The deployable shims are per-target and must NOT be built by
+# default — `lib/wasm` only links for emscripten, `ffi/node`/`ffi/android` need
+# a staged grammar manifest (and `ffi/android` an NDK toolchain). Build each
+# explicitly:
+#   ./scripts/arborium-rt build wasm runtime   # arborium-rt-wasm SIDE_MODULE
+#   ./scripts/arborium-rt build node           # arborium-rt-node addon
+#   ./scripts/arborium-rt build android        # libarborium_rt.so per ABI
 default-members = ["."]
 exclude = ["third_party"]
 

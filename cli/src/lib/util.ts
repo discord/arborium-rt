@@ -73,14 +73,17 @@ export interface Paths {
 	readonly targetDir: string;
 	readonly grammarsOut: string;
 	/**
-	 * `target/node-grammars/` — staging root for the statically-linked Node
-	 * addon. Holds per-grammar generated `parser.c` + scanner + flattened
-	 * `.scm` files plus a top-level `manifest.json` that `lib/node/build.rs`
-	 * consumes to compile the C in and bake the queries as `&'static str`.
+	 * `target/native-grammars/` — shared staging root for the statically-linked
+	 * native targets (Node addon, Android AAR, …). Holds per-grammar generated
+	 * `parser.c` + scanner + flattened `.scm` files plus a top-level
+	 * `manifest.json` that `lib/native/build.rs` consumes to compile the C in
+	 * and bake the queries as `&'static str`.
 	 */
-	readonly nodeGrammarsOut: string;
+	readonly nativeGrammarsOut: string;
 	/** `packages/arborium-rt-node/` — the native-addon npm package. */
 	readonly nodePackageDir: string;
+	/** `packages/arborium-rt-android/` — the Android AAR (Gradle) package. */
+	readonly androidPackageDir: string;
 	/**
 	 * Directory where per-grammar subdirs (index.js / index.d.ts / wasm /
 	 * .scm) are emitted. Lives inside the runtime package's `dist/` so the
@@ -126,8 +129,9 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
 		),
 		targetDir: join(repoRoot, "target"),
 		grammarsOut: join(repoRoot, "target", "grammars"),
-		nodeGrammarsOut: join(repoRoot, "target", "node-grammars"),
+		nativeGrammarsOut: join(repoRoot, "target", "native-grammars"),
 		nodePackageDir: join(repoRoot, "packages", "arborium-rt-node"),
+		androidPackageDir: join(repoRoot, "packages", "arborium-rt-android"),
 		packagesOut: join(
 			repoRoot,
 			"packages",
@@ -174,6 +178,24 @@ export function hostTriple(): string {
 		`unsupported host platform ${process.platform}/${process.arch}; set ARBORIUM_RT_HOST_TRIPLE`,
 	);
 }
+
+/**
+ * The Android targets we cross-compile `ffi/android` for, each mapping a Rust
+ * target triple to the Android ABI directory name (`jniLibs/<abi>/`) the AAR
+ * expects. `cargo-ndk` builds each triple against the NDK sysroot; a single
+ * Linux/macOS host produces all of them (no per-ABI runner needed).
+ */
+export interface AndroidTarget {
+	readonly triple: string;
+	readonly abi: string;
+}
+
+export const ANDROID_TARGETS: readonly AndroidTarget[] = [
+	{ triple: "aarch64-linux-android", abi: "arm64-v8a" },
+	{ triple: "armv7-linux-androideabi", abi: "armeabi-v7a" },
+	{ triple: "x86_64-linux-android", abi: "x86_64" },
+	{ triple: "i686-linux-android", abi: "x86" },
+];
 
 export interface RunOptions {
 	cwd?: string;
