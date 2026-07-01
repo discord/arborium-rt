@@ -1,14 +1,36 @@
 # arborium-rt
 
-Emscripten `SIDE_MODULE=2` runtime for [arborium](https://github.com/bearcove/arborium) grammar plugins.
+A [tree-sitter](https://tree-sitter.github.io/) + [arborium](https://github.com/bearcove/arborium)
+highlight runtime, packaged for two hosts:
 
-Loads once into web-tree-sitter's `MAIN_MODULE=2` wasm and runs
-`arborium-plugin-runtime`'s session / highlight / injection logic across
-many grammars loaded dynamically at runtime, so the tree-sitter C
-runtime and arborium's query runner live once in the browser instead
-of being baked into every grammar bundle.
+- **`@discord/arborium-rt-wasm`** (browser) — an Emscripten
+  `SIDE_MODULE=2` runtime that loads once into web-tree-sitter's
+  `MAIN_MODULE=2` wasm and runs `arborium-plugin-runtime`'s session /
+  highlight / injection logic across many grammars loaded **dynamically**
+  at runtime, so the tree-sitter C runtime and arborium's query runner
+  live once in the browser instead of being baked into every grammar
+  bundle.
+- **`@discord/arborium-rt-node`** (Node.js) — a **statically-linked**
+  native addon (napi-rs) that compiles every grammar's parser/scanner and
+  bakes every flattened query directly into one `.node` binary. No wasm,
+  no host module, no dynamic loading — just call
+  `highlightToSpans(language, text)`. Prebuilt binaries ship for darwin
+  (x64, arm64), linux gnu (x64, arm64), and win32 x64 (msvc).
 
-## Architecture
+Both packages expose the same highlight pipeline over the same
+target-agnostic `arborium-rt` Rust core and return structurally identical
+result types, so they're interchangeable for highlighting.
+
+> **Distribution.** Each release attaches the browser tarball and the
+> per-platform Node `.node` binaries to a **GitHub Release** — install
+> from there.
+
+The sections below cover the browser package; see [Node.js](#nodejs) for
+the native addon and
+[`packages/arborium-rt-wasm/README.md`](./packages/arborium-rt-wasm/README.md)
+for the full browser consumer API.
+
+## Architecture (browser)
 
 ```
 ┌─────────────────────────────────┐
@@ -44,14 +66,16 @@ through shared linear memory.
 
 ## Quick start
 
-Most consumers should use the typed TypeScript wrapper:
+Browser consumers should use the typed TypeScript wrapper. Grab the
+`discord-arborium-rt-wasm-<version>.tgz` tarball from the latest GitHub
+Release and install it:
 
 ```sh
-npm install @discord/arborium-rt
+npm install ./discord-arborium-rt-wasm-<version>.tgz
 ```
 
 ```ts
-import { loadArboriumRuntime, GRAMMARS } from "@discord/arborium-rt";
+import { loadArboriumRuntime, GRAMMARS } from "@discord/arborium-rt-wasm";
 
 const runtime = await loadArboriumRuntime();
 const grammar = await runtime.loadGrammar(GRAMMARS.json);
@@ -84,24 +108,25 @@ theming — `session.parse()` returns a `Utf16ParseResult` with
 `{ spans, injections }`.
 
 `loadArboriumRuntime()` takes no arguments — the host wasm and the runtime
-SIDE_MODULE ship inside the npm package and resolve relative to their own
+SIDE_MODULE ship inside the package and resolve relative to their own
 module URL. Bundlers (Vite, webpack, esbuild) trace the specifiers and
 copy the wasm assets into your build automatically.
 
-See [`packages/arborium-rt/README.md`](./packages/arborium-rt/README.md)
+See [`packages/arborium-rt-wasm/README.md`](./packages/arborium-rt-wasm/README.md)
 for the full consumer API (`Runtime`, `Grammar`, `Session`,
 `highlightToSpans`, `highlightToHtml`, error shapes).
 
 ## Grammars
 
-Every supported grammar is bundled into the `@discord/arborium-rt` tarball
-and exposed as a single eager map — `GRAMMARS` — keyed by language id.
-Each entry carries lightweight metadata (`languageId`, `languageExport`)
-plus URL references to the per-grammar `.wasm` and `.scm` assets; the
-bytes are only fetched when `loadGrammar` runs.
+Every supported grammar is bundled into the `@discord/arborium-rt-wasm`
+tarball and exposed as a single eager map — `GRAMMARS` — keyed by language
+id (its `BundledGrammarId` union). Each entry carries lightweight metadata
+(`languageId`, `languageExport`) plus URL references to the per-grammar
+`.wasm` and `.scm` assets; the bytes are only fetched when `loadGrammar`
+runs.
 
 ```ts
-import { GRAMMARS, loadArboriumRuntime, AVAILABLE_LANGUAGES } from "@discord/arborium-rt";
+import { GRAMMARS, loadArboriumRuntime } from "@discord/arborium-rt-wasm";
 
 const runtime = await loadArboriumRuntime();
 const grammar = await runtime.loadGrammar(GRAMMARS.typescript);
@@ -110,7 +135,7 @@ const grammar = await runtime.loadGrammar(GRAMMARS.typescript);
 Layout inside the package:
 
 ```
-@discord/arborium-rt/
+@discord/arborium-rt-wasm/
 ├── dist/
 │   ├── host/web-tree-sitter.{wasm,mjs}
 │   ├── runtime/arborium_emscripten_runtime.wasm
@@ -135,6 +160,19 @@ naive bundler trace will emit ~160 MB of `.wasm` + `.scm` even if the
 consumer only uses a handful. If your bundler can tree-shake based on
 which entries you actually reference, you'll only pay for the grammars
 you load. Otherwise, expect the full asset set.
+
+## Node.js
+
+For server-side use, `@discord/arborium-rt-node` is a native addon with
+**every** grammar statically linked in — no wasm host, no dynamic loading,
+no assets to trace. It exposes the same highlight pipeline
+(`highlightToSpans` / `highlightToHtml` / `Session`) and result shapes as
+the browser package; you just name the language by id instead of loading a
+grammar. Prebuilt binaries ship for darwin (x64, arm64), linux gnu (x64,
+arm64), and win32 x64 (msvc).
+
+See [`packages/arborium-rt-node/README.md`](./packages/arborium-rt-node/README.md)
+for the full consumer API.
 
 ## Raw ABI
 
@@ -248,4 +286,4 @@ builds the target-agnostic core `arborium-rt` rlib natively.
 
 ## License
 
-MIT, matching arborium.
+MIT

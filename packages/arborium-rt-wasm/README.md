@@ -1,4 +1,4 @@
-# @discord/arborium-rt
+# @discord/arborium-rt-wasm
 
 TypeScript package that dynamically links tree-sitter, arborium, and per-grammar
 parser tables in the browser so each pays for itself exactly once.
@@ -8,8 +8,11 @@ usage.
 
 ## Install
 
+Grab the `discord-arborium-rt-wasm-<version>.tgz` tarball from the latest
+GitHub Release and install it:
+
 ```sh
-npm install @discord/arborium-rt
+npm install ./discord-arborium-rt-wasm-<version>.tgz
 ```
 
 The package ships three asset kinds alongside its compiled JS:
@@ -22,7 +25,7 @@ arborium-rt SIDE_MODULE), and `dist/grammars/<lang>/{tree-sitter-<lang>.wasm, *.
 ## Usage
 
 ```ts
-import { GRAMMARS, loadArboriumRuntime } from '@discord/arborium-rt';
+import { GRAMMARS, loadArboriumRuntime } from '@discord/arborium-rt-wasm';
 
 const runtime = await loadArboriumRuntime();
 const grammar = await runtime.loadGrammar(GRAMMARS.rust);
