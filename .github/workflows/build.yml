@@ -366,6 +366,8 @@ jobs:
             runs-on: macos-14
           - platform: win32-x64-msvc
             runs-on: windows-latest
+          - platform: win32-arm64-msvc
+            runs-on: windows-11-arm
     runs-on: ${{ matrix.runs-on }}
     # The ./scripts/arborium-rt wrapper is a bash script; Windows runners
     # default to PowerShell, so force bash for every run step in this job.
