@@ -1,0 +1,223 @@
+From 273136a830f3ce8f2ddab9b7fffb6c44789c2e01 Mon Sep 17 00:00:00 2001
+From: AJ <aj@discordapp.com>
+Date: Tue, 6 Oct 2026 18:48:42 +0000
+Subject: [PATCH] Emit lex functions as word programs under
+ TREE_SITTER_LEX_PROGRAM
+
+Record, alongside the C that add_lex_state renders, the same checks as a
+flat uint32_t program: per lex state the accept symbol, eof target,
+ADVANCE_MAP pairs and each transition's flags, target, large character set
+and asserted/negated ranges, exactly as rendered (including the ruled-out
+simplification). Emit one array per lex function plus every large
+character set, all inside #ifdef TREE_SITTER_LEX_PROGRAM so a normal build
+of parser.c is unchanged.
+
+arborium-rt packs these programs and replays them with an interpreter in
+the shared wasm host instead of shipping each grammar's compiled lexer.
+---
+ crates/generate/src/render.rs | 121 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 121 insertions(+)
+
+diff --git a/crates/generate/src/render.rs b/crates/generate/src/render.rs
+index f298f92..a667057 100644
+--- a/crates/generate/src/render.rs
++++ b/crates/generate/src/render.rs
+@@ -86,6 +86,8 @@ struct Generator {
+     keyword_lex_table: LexTable,
+     large_character_sets: Vec<(Option<Symbol>, CharacterSet)>,
+     large_character_set_info: Vec<LargeCharacterSetInfo>,
++    lex_program: Vec<u32>,
++    lex_programs: Vec<(String, Vec<u32>)>,
+     large_state_count: usize,
+     syntax_grammar: SyntaxGrammar,
+     lexical_grammar: LexicalGrammar,
+@@ -168,6 +170,7 @@ impl Generator {
+             self.add_character_set(ix);
+         }
+         self.buffer.push_str(&lex_functions);
++        self.add_lex_programs();
+ 
+         self.add_lex_modes();
+ 
+@@ -940,6 +943,8 @@ impl Generator {
+         add_line!(self, "eof = lexer->eof(lexer);");
+         add_line!(self, "switch (state) {{");
+ 
++        self.lex_program.clear();
++        self.lex_program.push(lex_table.states.len() as u32);
+         indent!(self);
+         for (i, state) in lex_table.states.into_iter().enumerate() {
+             add_line!(self, "case {i}:");
+@@ -959,15 +964,88 @@ impl Generator {
+         dedent!(self);
+         add_line!(self, "}}");
+         add_line!(self, "");
++
++        let program = std::mem::take(&mut self.lex_program);
++        self.lex_programs.push((format!("{name}_program"), program));
++    }
++
++    /// arborium-rt: the lex functions as data, behind `TREE_SITTER_LEX_PROGRAM`.
++    ///
++    /// Each `<lex function>_program` array records, word by word, exactly the
++    /// checks `add_lex_state` rendered as C, so an interpreter can replay the
++    /// lexer without the compiled function:
++    ///
++    ///   state_count, then per state:
++    ///     accept symbol + 1 (0: none), eof target + 1 (0: none),
++    ///     ADVANCE_MAP pair count, then (character, state) pairs,
++    ///     transition count, then per transition:
++    ///       flags: 1 SKIP (else ADVANCE), 2 large set, 4 large set needs !eof,
++    ///              8/16 asserted ranges rendered included (||) / excluded (&&),
++    ///              32 negated ranges (&&); no condition bits = unconditional
++    ///       target state
++    ///       [large set index] [asserted count, ranges] [negated count, ranges]
++    ///
++    /// `ts_lex_character_sets` holds every large character set, used or not,
++    /// as a range count followed by (start, end) pairs; unused sets are empty.
++    fn add_lex_programs(&mut self) {
++        let programs = std::mem::take(&mut self.lex_programs);
++        add_line!(self, "#ifdef TREE_SITTER_LEX_PROGRAM");
++        for (name, words) in &programs {
++            self.add_u32_array(name, words);
++        }
++        let mut sets = vec![self.large_character_sets.len() as u32];
++        for (ix, (_, set)) in self.large_character_sets.iter().enumerate() {
++            if self.large_character_set_info.get(ix).is_some_and(|info| info.is_used) {
++                sets.push(set.range_count() as u32);
++                for range in set.ranges() {
++                    sets.push(*range.start() as u32);
++                    sets.push(*range.end() as u32);
++                }
++            } else {
++                sets.push(0);
++            }
++        }
++        self.add_u32_array("ts_lex_character_sets", &sets);
++        if programs.len() > 1 {
++            add_line!(self, "#define TREE_SITTER_LEX_KEYWORDS_PROGRAM ts_lex_keywords_program");
++        }
++        add_line!(self, "#endif");
++        add_line!(self, "");
++    }
++
++    fn add_u32_array(&mut self, name: &str, words: &[u32]) {
++        add_line!(self, "static const uint32_t {name}[] = {{");
++        for chunk in words.chunks(16) {
++            add_whitespace!(self);
++            for word in chunk {
++                add!(self, "{word},");
++            }
++            add!(self, "\n");
++        }
++        add_line!(self, "}};");
++    }
++
++    fn push_lex_ranges(&mut self, chars: &CharacterSet) {
++        self.lex_program.push(chars.range_count() as u32);
++        for range in chars.ranges() {
++            self.lex_program.push(*range.start() as u32);
++            self.lex_program.push(*range.end() as u32);
++        }
+     }
+ 
+     fn add_lex_state(&mut self, _state_ix: usize, state: LexState) {
+         if let Some(accept_action) = state.accept_action {
+             add_line!(self, "ACCEPT_TOKEN({});", self.symbol_ids[&accept_action]);
++            self.lex_program.push(self.symbol_order[&accept_action] as u32 + 1);
++        } else {
++            self.lex_program.push(0);
+         }
+ 
+         if let Some(eof_action) = state.eof_action {
+             add_line!(self, "if (eof) ADVANCE({});", eof_action.state);
++            self.lex_program.push(eof_action.state as u32 + 1);
++        } else {
++            self.lex_program.push(0);
+         }
+ 
+         let mut chars_copy = CharacterSet::empty();
+@@ -999,15 +1077,23 @@ impl Generator {
+         if leading_simple_transition_range_count >= 8 {
+             add_line!(self, "ADVANCE_MAP(");
+             indent!(self);
++            let map_count_index = self.lex_program.len();
++            self.lex_program.push(0);
+             for (chars, action) in &state.advance_actions[0..leading_simple_transition_count] {
+                 for range in chars.ranges() {
+                     add_whitespace!(self);
+                     self.add_character(*range.start());
+                     add!(self, ", {},\n", action.state);
++                    self.lex_program.push(*range.start() as u32);
++                    self.lex_program.push(action.state as u32);
++                    self.lex_program[map_count_index] += 1;
+                     if range.end() > range.start() {
+                         add_whitespace!(self);
+                         self.add_character(*range.end());
+                         add!(self, ", {},\n", action.state);
++                        self.lex_program.push(*range.end() as u32);
++                        self.lex_program.push(action.state as u32);
++                        self.lex_program[map_count_index] += 1;
+                     }
+                 }
+                 ruled_out_chars = ruled_out_chars.add(chars);
+@@ -1016,7 +1102,10 @@ impl Generator {
+             add_line!(self, ");");
+         } else {
+             leading_simple_transition_count = 0;
++            self.lex_program.push(0);
+         }
++        self.lex_program
++            .push((state.advance_actions.len() - leading_simple_transition_count) as u32);
+ 
+         for (chars, action) in &state.advance_actions[leading_simple_transition_count..] {
+             add_whitespace!(self);
+@@ -1079,6 +1168,36 @@ impl Generator {
+             let has_positive_condition = large_char_set_ix.is_some() || !asserted_chars.is_empty();
+             let has_negative_condition = !negated_chars.is_empty();
+             let has_condition = has_positive_condition || has_negative_condition;
++
++            let mut flags = u32::from(!action.in_main_token);
++            if let Some(ix) = large_char_set_ix {
++                flags |= 2;
++                if self.large_character_sets[ix].1.contains('\0') {
++                    flags |= 4;
++                }
++            }
++            let asserted_included = !asserted_chars.contains(char::MAX);
++            if !asserted_chars.is_empty() {
++                flags |= if asserted_included { 8 } else { 16 };
++            }
++            if has_negative_condition {
++                flags |= 32;
++            }
++            self.lex_program.push(flags);
++            self.lex_program.push(action.state as u32);
++            if let Some(ix) = large_char_set_ix {
++                self.lex_program.push(ix as u32);
++            }
++            if !asserted_chars.is_empty() {
++                if asserted_included {
++                    self.push_lex_ranges(&asserted_chars.clone());
++                } else {
++                    self.push_lex_ranges(&asserted_chars.clone().negate().add_char('\0'));
++                }
++            }
++            if has_negative_condition {
++                self.push_lex_ranges(&negated_chars.clone());
++            }
+             if has_condition {
+                 add!(self, "if (");
+                 if has_positive_condition && has_negative_condition {
+@@ -2082,6 +2201,8 @@ pub fn render_c_code(
+         keyword_lex_table: tables.keyword_lex_table,
+         large_character_sets: tables.large_character_sets,
+         large_character_set_info: Vec::new(),
++        lex_program: Vec::new(),
++        lex_programs: Vec::new(),
+         syntax_grammar,
+         lexical_grammar,
+         default_aliases,
+-- 
+2.50.1
+

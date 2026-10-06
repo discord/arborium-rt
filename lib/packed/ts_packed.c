@@ -534,6 +534,12 @@ typedef struct {
   uint32_t supertype_slice_count;
   U16Vec supertype_map_entries;
 
+  // lexers, as the word programs render.rs emits under TREE_SITTER_LEX_PROGRAM
+  bool has_lex_program;
+  U32Vec lex_main;
+  U32Vec lex_keywords;
+  U32Vec lex_sets;
+
   // parse table
   VEC(RedAct) red_acts;
   U16Vec rank_order;  // symbols in group sort order
@@ -549,6 +555,9 @@ typedef struct {
 } IR;
 
 static void ir_free(IR *ir) {
+  VFREE(ir->lex_main);
+  VFREE(ir->lex_keywords);
+  VFREE(ir->lex_sets);
   VFREE(ir->strings);
   VFREE(ir->symbol_metadata);
   VFREE(ir->public_symbol_map);
@@ -590,6 +599,9 @@ enum {
   C_LA_RED, C_LA_GLOB, C_LA_GIDX, C_LA_REF, C_LA_BIT,
   C_LM_HIT, C_LM_LEX, C_LM_EXT, C_LM_RES,
   C_ORD, C_ORD_P, C_REUS_ANY, C_REUS_BIT,
+  C_LX_N, C_LX_ACC, C_LX_EOF_SAME, C_LX_EOF, C_LX_MAP_N, C_LX_MAP_CHAR, C_LX_TARGET, C_LX_TGT_SELF,
+  C_LX_TGT_PREV, C_LX_TGT_NEXT, C_LX_TR_N, C_LX_FLAGS, C_LX_LARGE, C_LX_RANGES_N, C_LX_RANGE_GAP,
+  C_LX_RANGE_LEN, C_LX_SETS,
 };
 
 // ---------------------------------------------------------------------------
@@ -1791,6 +1803,8 @@ static void code_parse_states(Codec *c, IR *ir, PModel *m) {
   }
 }
 
+static void code_lexers(Codec *c, IR *ir);
+
 // Order of every model section, shared by both directions.
 static void code_all(Codec *c, IR *ir, PModel *m) {
   ir->abi_version = chdr(c, 0, ir->abi_version);
@@ -1807,7 +1821,8 @@ static void code_all(Codec *c, IR *ir, PModel *m) {
   ir->supertype_count = chdr(c, 11, ir->supertype_count);
   for (int i = 0; i < 3; i++) ir->metadata[i] = (uint8_t)chdr(c, 12 + i, ir->metadata[i]);
   uint32_t flags = ir->has_keyword_lex | ir->has_external_scanner << 1 | ir->has_field_map << 2 |
-                   ir->has_alias_sequences << 3 | ir->has_alias_map << 4 | ir->has_name << 5;
+                   ir->has_alias_sequences << 3 | ir->has_alias_map << 4 | ir->has_name << 5 |
+                   ir->has_lex_program << 6;
   flags = chdr(c, 15, flags);
   ir->has_keyword_lex = flags & 1;
   ir->has_external_scanner = (flags >> 1) & 1;
@@ -1815,12 +1830,14 @@ static void code_all(Codec *c, IR *ir, PModel *m) {
   ir->has_alias_sequences = (flags >> 3) & 1;
   ir->has_alias_map = (flags >> 4) & 1;
   ir->has_name = (flags >> 5) & 1;
+  ir->has_lex_program = (flags >> 6) & 1;
   if (c->failed || ir->symbol_count > 65535 || ir->state_count > 65535 || ir->token_count > ir->symbol_count) {
     MARK_FAILED(c);
     return;
   }
 
   code_misc_tables(c, ir);
+  code_lexers(c, ir);
   code_external_states(c, ir);
   code_reduce_actions(c, ir);
   code_rank(c, ir);
@@ -1833,6 +1850,342 @@ static void code_all(Codec *c, IR *ir, PModel *m) {
   }
   if (!pmodel_init(c, ir, m)) return;
   code_parse_states(c, ir, m);
+}
+
+// ---------------------------------------------------------------------------
+// Lexers: the word programs render.rs emits (see patches/tree-sitter/0003)
+
+static uint32_t lw(Codec *c, U32Vec *w, uint32_t *pos, uint32_t v) {
+  if (c->enc) {
+    if (*pos >= w->len) {
+      MARK_FAILED(c);
+      return 0;
+    }
+    return w->data[(*pos)++];
+  }
+  VPUSH(c, *w, v);
+  (*pos)++;
+  return v;
+}
+
+// Code a range list: count, then (gap from the previous end, length) pairs.
+static void code_lex_ranges(Codec *c, U32Vec *w, uint32_t *pos, uint32_t ctx) {
+  uint32_t n = ENC ? w->data[*pos] : 0;
+  n = cnum(c, K(C_LX_RANGES_N, ctx, 0), n);
+  lw(c, w, pos, n);
+  uint32_t prev_end = 0;
+  for (uint32_t i = 0; i < n && !c->failed; i++) {
+    uint32_t start = ENC ? w->data[*pos] : 0;
+    uint32_t end = ENC ? w->data[*pos + 1] : 0;
+    uint32_t gap = cnum(c, K(C_LX_RANGE_GAP, ctx, i == 0), ENC ? start - (i ? prev_end + 1 : 0) : 0);
+    start = (i ? prev_end + 1 : 0) + gap;
+    uint32_t len = cnum(c, K(C_LX_RANGE_LEN, ctx, 0), ENC ? end - start : 0);
+    end = start + len;
+    lw(c, w, pos, start);
+    lw(c, w, pos, end);
+    prev_end = end;
+  }
+}
+
+static uint32_t code_lex_target(Codec *c, uint32_t comp, uint32_t s, uint32_t prev, uint32_t n_states, uint32_t v) {
+  int self = cbitf(c, C_LX_TGT_SELF, comp, ENC && v == s);
+  if (self) return s;
+  if (prev != NONE) {
+    int same = cbitf(c, C_LX_TGT_PREV, comp, ENC && v == prev);
+    if (same) return prev;
+  }
+  int next = cbitf(c, C_LX_TGT_NEXT, comp, ENC && v == s + 1);
+  if (next) return s + 1;
+  return cbelow(c, K(C_LX_TARGET, comp, 0), v, n_states);
+}
+
+static void code_lex_program(Codec *c, U32Vec *w, uint32_t which, uint32_t n_sets) {
+  uint32_t pos = 0;
+  uint32_t n = cnum(c, K(C_LX_N, which, 0), ENC ? w->data[0] : 0);
+  lw(c, w, &pos, n);
+  uint32_t prev_eof = 0;
+  for (uint32_t s = 0; s < n && !c->failed; s++) {
+    uint32_t acc = cnum(c, K(C_LX_ACC, which, 0), ENC ? w->data[pos] : 0);
+    lw(c, w, &pos, acc);
+    uint32_t eof = ENC ? w->data[pos] : 0;
+    int same = cbitf(c, C_LX_EOF_SAME, which * 2 + (prev_eof != 0), ENC && eof == prev_eof);
+    if (!same) eof = cnum(c, K(C_LX_EOF, which, 0), eof);
+    else eof = prev_eof;
+    lw(c, w, &pos, eof);
+    prev_eof = eof;
+    uint32_t map_n = cnum(c, K(C_LX_MAP_N, which, 0), ENC ? w->data[pos] : 0);
+    lw(c, w, &pos, map_n);
+    uint32_t prev_char = 0, prev_target = NONE;
+    for (uint32_t i = 0; i < map_n && !c->failed; i++) {
+      uint32_t ch = ENC ? w->data[pos] : 0;
+      uint32_t d = cnum(c, K(C_LX_MAP_CHAR, which, i == 0), ENC ? ch - (i ? prev_char + 1 : 0) : 0);
+      ch = (i ? prev_char + 1 : 0) + d;
+      lw(c, w, &pos, ch);
+      uint32_t t = code_lex_target(c, which * 2, s, prev_target, n, ENC ? w->data[pos] : 0);
+      lw(c, w, &pos, t);
+      prev_char = ch;
+      prev_target = t;
+    }
+    uint32_t tr_n = cnum(c, K(C_LX_TR_N, which, map_n != 0), ENC ? w->data[pos] : 0);
+    lw(c, w, &pos, tr_n);
+    uint32_t prev_flags = 64;
+    for (uint32_t i = 0; i < tr_n && !c->failed; i++) {
+      uint32_t flags = cbelow(c, K(C_LX_FLAGS, which, prev_flags), ENC ? w->data[pos] : 0, 64);
+      lw(c, w, &pos, flags);
+      uint32_t t = code_lex_target(c, which * 2 + 1, s, prev_target, n, ENC ? w->data[pos] : 0);
+      lw(c, w, &pos, t);
+      prev_target = t;
+      if (flags & 2) {
+        uint32_t ix = cbelow(c, K(C_LX_LARGE, 0, 0), ENC ? w->data[pos] : 0, n_sets);
+        lw(c, w, &pos, ix);
+      }
+      if (flags & 24) code_lex_ranges(c, w, &pos, (flags & 8) ? 1 : 2);
+      if (flags & 32) code_lex_ranges(c, w, &pos, 3);
+      prev_flags = flags;
+    }
+  }
+  if (ENC && pos != w->len) MARK_FAILED(c);
+}
+
+static void code_lex_sets(Codec *c, U32Vec *w) {
+  uint32_t pos = 0;
+  uint32_t n = cnum(c, K(C_LX_SETS, 0, 0), ENC ? w->data[0] : 0);
+  lw(c, w, &pos, n);
+  for (uint32_t i = 0; i < n && !c->failed; i++) code_lex_ranges(c, w, &pos, 4);
+  if (ENC && pos != w->len) MARK_FAILED(c);
+}
+
+static void code_lexers(Codec *c, IR *ir) {
+  if (!ir->has_lex_program) return;
+  code_lex_sets(c, &ir->lex_sets);
+  uint32_t n_sets = ir->lex_sets.len ? ir->lex_sets.data[0] : 0;
+  code_lex_program(c, &ir->lex_main, 0, n_sets);
+  if (ir->has_keyword_lex) code_lex_program(c, &ir->lex_keywords, 1, n_sets);
+}
+
+typedef struct {
+  uint16_t accept;  // symbol + 1, or 0
+  uint16_t eof;     // target + 1, or 0
+  uint32_t map, map_n;
+  uint32_t trans, trans_n;
+} LexStateRec;
+
+typedef struct {
+  uint8_t flags;
+  uint16_t target;
+  uint16_t large;
+  uint32_t asserted, asserted_n;
+  uint32_t negated, negated_n;
+} LexTransRec;
+
+typedef struct {
+  uint32_t count;
+  uint32_t *offset;
+  uint32_t *length;
+  TSCharacterRange *ranges;
+} LexSets;
+
+struct TSPackedLexer {
+  uint32_t state_count;
+  LexStateRec *states;
+  uint32_t *map_chars;
+  uint16_t *map_states;
+  LexTransRec *trans;
+  TSCharacterRange *ranges;
+  const LexSets *sets;
+};
+
+static LexSets *lex_sets_build(const U32Vec *w) {
+  LexSets *ls = calloc(1, sizeof(LexSets));
+  if (!ls || !w->len) return ls;
+  uint32_t n = w->data[0];
+  ls->count = n;
+  ls->offset = calloc(n ? n : 1, sizeof(uint32_t));
+  ls->length = calloc(n ? n : 1, sizeof(uint32_t));
+  ls->ranges = calloc((w->len - 1) / 2 + 1, sizeof(TSCharacterRange));
+  if (!ls->offset || !ls->length || !ls->ranges) return NULL;
+  uint32_t pos = 1, r = 0;
+  for (uint32_t i = 0; i < n && pos < w->len; i++) {
+    uint32_t m = w->data[pos++];
+    ls->offset[i] = r;
+    ls->length[i] = m;
+    for (uint32_t j = 0; j < m && pos + 1 < w->len; j++, pos += 2) {
+      ls->ranges[r].start = (int32_t)w->data[pos];
+      ls->ranges[r].end = (int32_t)w->data[pos + 1];
+      r++;
+    }
+  }
+  return ls;
+}
+
+static TSPackedLexer *lex_build(const U32Vec *w, const LexSets *sets) {
+  // Two passes over the words: count, then fill.
+  uint32_t n = w->data[0], pos = 1, maps = 0, trans = 0, ranges = 0;
+  for (uint32_t s = 0; s < n; s++) {
+    pos += 2;
+    uint32_t mn = w->data[pos++];
+    maps += mn;
+    pos += 2 * mn;
+    uint32_t tn = w->data[pos++];
+    trans += tn;
+    for (uint32_t i = 0; i < tn; i++) {
+      uint32_t flags = w->data[pos];
+      pos += 2;
+      if (flags & 2) pos++;
+      if (flags & 24) {
+        ranges += w->data[pos];
+        pos += 1 + 2 * w->data[pos];
+      }
+      if (flags & 32) {
+        ranges += w->data[pos];
+        pos += 1 + 2 * w->data[pos];
+      }
+    }
+  }
+  TSPackedLexer *lx = calloc(1, sizeof(TSPackedLexer));
+  if (!lx) return NULL;
+  lx->state_count = n;
+  lx->states = calloc(n ? n : 1, sizeof(LexStateRec));
+  lx->map_chars = calloc(maps ? maps : 1, sizeof(uint32_t));
+  lx->map_states = calloc(maps ? maps : 1, sizeof(uint16_t));
+  lx->trans = calloc(trans ? trans : 1, sizeof(LexTransRec));
+  lx->ranges = calloc(ranges ? ranges : 1, sizeof(TSCharacterRange));
+  lx->sets = sets;
+  if (!lx->states || !lx->map_chars || !lx->map_states || !lx->trans || !lx->ranges) return NULL;
+  pos = 1;
+  uint32_t mi = 0, ti = 0, ri = 0;
+  for (uint32_t s = 0; s < n; s++) {
+    LexStateRec *st = &lx->states[s];
+    st->accept = (uint16_t)w->data[pos++];
+    st->eof = (uint16_t)w->data[pos++];
+    st->map = mi;
+    st->map_n = w->data[pos++];
+    for (uint32_t i = 0; i < st->map_n; i++, mi++) {
+      lx->map_chars[mi] = w->data[pos++];
+      lx->map_states[mi] = (uint16_t)w->data[pos++];
+    }
+    st->trans = ti;
+    st->trans_n = w->data[pos++];
+    for (uint32_t i = 0; i < st->trans_n; i++, ti++) {
+      LexTransRec *t = &lx->trans[ti];
+      t->flags = (uint8_t)w->data[pos++];
+      t->target = (uint16_t)w->data[pos++];
+      if (t->flags & 2) t->large = (uint16_t)w->data[pos++];
+      for (int part = 0; part < 2; part++) {
+        if (!(t->flags & (part == 0 ? 24 : 32))) continue;
+        uint32_t m = w->data[pos++];
+        if (part == 0) {
+          t->asserted = ri;
+          t->asserted_n = m;
+        } else {
+          t->negated = ri;
+          t->negated_n = m;
+        }
+        for (uint32_t j = 0; j < m; j++, ri++) {
+          lx->ranges[ri].start = (int32_t)w->data[pos++];
+          lx->ranges[ri].end = (int32_t)w->data[pos++];
+        }
+      }
+    }
+  }
+  return lx;
+}
+
+// The conditions render.rs's add_character_range_conditions emits.
+static inline bool lex_ranges_included(const TSCharacterRange *r, uint32_t n, int32_t la, bool eof) {
+  for (uint32_t i = 0; i < n; i++) {
+    if (r[i].start == 0) {
+      if (!eof && (r[i].end == 0 ? la == 0 : la <= r[i].end)) return true;
+    } else if (r[i].start <= la && la <= r[i].end) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// (Same order of cases as render.rs, which matters for ranges starting at 0
+// when the lookahead is negative.)
+static inline bool lex_ranges_excluded(const TSCharacterRange *r, uint32_t n, int32_t la) {
+  for (uint32_t i = 0; i < n; i++) {
+    int32_t start = r[i].start, end = r[i].end;
+    if (end == start) {
+      if (la == start) return false;
+    } else if (end == start + 1) {
+      if (la == start || la == end) return false;
+    } else if (start != 0) {
+      if (start <= la && la <= end) return false;
+    } else if (!(la > end)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Replays a lex function: the same control flow as START_LEXER, ACCEPT_TOKEN,
+// ADVANCE, SKIP, ADVANCE_MAP and END_STATE in tree_sitter/parser.h.
+bool ts_packed_lex(const TSPackedLexer *lx, TSLexer *lexer, uint16_t state) {
+  bool result = false;
+  bool skip = false;
+  bool eof = false;
+  int32_t lookahead;
+  goto start;
+next_state:
+  lexer->advance(lexer, skip);
+start:
+  skip = false;
+  lookahead = lexer->lookahead;
+  eof = lexer->eof(lexer);
+  if (state >= lx->state_count) return false;
+  {
+    const LexStateRec *st = &lx->states[state];
+    if (st->accept) {
+      result = true;
+      lexer->result_symbol = st->accept - 1;
+      lexer->mark_end(lexer);
+    }
+    if (st->eof && eof) {
+      state = st->eof - 1;
+      goto next_state;
+    }
+    for (uint32_t i = 0; i < st->map_n; i++) {
+      if ((int32_t)lx->map_chars[st->map + i] == lookahead) {
+        state = lx->map_states[st->map + i];
+        goto next_state;
+      }
+    }
+    for (uint32_t i = 0; i < st->trans_n; i++) {
+      const LexTransRec *t = &lx->trans[st->trans + i];
+      bool positive = false, has_positive = false;
+      if (t->flags & 2) {
+        has_positive = true;
+        const LexSets *sets = lx->sets;
+        if (t->large < sets->count) {
+          positive = (!(t->flags & 4) || !eof) &&
+                     set_contains(sets->ranges + sets->offset[t->large], sets->length[t->large], lookahead);
+        }
+      }
+      if (!positive && (t->flags & 24)) {
+        has_positive = true;
+        positive = (t->flags & 8) ? lex_ranges_included(lx->ranges + t->asserted, t->asserted_n, lookahead, eof)
+                                  : lex_ranges_excluded(lx->ranges + t->asserted, t->asserted_n, lookahead);
+      } else if (t->flags & 24) {
+        has_positive = true;
+      }
+      bool ok;
+      if (t->flags & 32) {
+        bool negative = lex_ranges_excluded(lx->ranges + t->negated, t->negated_n, lookahead);
+        ok = (!has_positive || positive) && negative;
+      } else {
+        ok = !has_positive || positive;
+      }
+      if (ok) {
+        skip = t->flags & 1;
+        state = t->target;
+        goto next_state;
+      }
+    }
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -2281,6 +2634,19 @@ static TSLanguage *render_language(Codec *c, IR *ir, PModel *m, const TSPackedFu
 
   L->lex_fn = fns->lex_fn;
   L->keyword_lex_fn = fns->keyword_lex_fn;
+  if (ir->has_lex_program) {
+    const LexSets *sets = lex_sets_build(&ir->lex_sets);
+    const TSPackedLexer *main_lexer = sets ? lex_build(&ir->lex_main, sets) : NULL;
+    const TSPackedLexer *keyword_lexer = NULL;
+    if (ir->has_keyword_lex) keyword_lexer = sets ? lex_build(&ir->lex_keywords, sets) : NULL;
+    if (!main_lexer || (ir->has_keyword_lex && !keyword_lexer) || !fns->lex_program ||
+        (ir->has_keyword_lex && !fns->keyword_lex_program)) {
+      MARK_FAILED(c);
+      return NULL;
+    }
+    *fns->lex_program = main_lexer;
+    if (keyword_lexer) *fns->keyword_lex_program = keyword_lexer;
+  }
   L->keyword_capture_token = (TSSymbol)ir->keyword_capture_token;
   if (ir->external_token_count) {
     L->external_scanner.states = dup_array(ir->external_states.data, ir->external_states.len);
@@ -2359,6 +2725,7 @@ const TSLanguage *ts_packed_language_load(const uint8_t *data, size_t length, co
 
 #ifdef TS_PACKED_ENCODER
 
+#include <setjmp.h>
 #include <stdio.h>
 
 // Index of each token's list in ir->overlap.
@@ -2945,7 +3312,17 @@ static bool extract(Codec *c, const TSLanguage *L, IR *ir) {
   return extract_parse_table(c, L, ir);
 }
 
-uint8_t *ts_packed_encode(const TSLanguage *L, size_t *length, const char **error) {
+// Word programs of the lex functions (TREE_SITTER_LEX_PROGRAM in parser.c).
+typedef struct {
+  const uint32_t *main;
+  size_t main_len;
+  const uint32_t *keywords;
+  size_t keywords_len;
+  const uint32_t *sets;
+  size_t sets_len;
+} TSPackedLexSource;
+
+uint8_t *ts_packed_encode(const TSLanguage *L, const TSPackedLexSource *lex, size_t *length, const char **error) {
   static Codec c;
   memset(&c, 0, sizeof c);
   c.enc = true;
@@ -2957,6 +3334,16 @@ uint8_t *ts_packed_encode(const TSLanguage *L, size_t *length, const char **erro
   g_error = NULL;
   uint8_t *result = NULL;
   if (!extract(&c, L, &ir)) goto done;
+  if (lex) {
+    ir.has_lex_program = true;
+    for (size_t i = 0; i < lex->main_len; i++) VPUSH(&c, ir.lex_main, lex->main[i]);
+    for (size_t i = 0; i < lex->keywords_len; i++) VPUSH(&c, ir.lex_keywords, lex->keywords[i]);
+    for (size_t i = 0; i < lex->sets_len; i++) VPUSH(&c, ir.lex_sets, lex->sets[i]);
+    if (!lex->main_len || !lex->sets_len || (ir.has_keyword_lex && !lex->keywords_len)) {
+      g_error = "missing lex program";
+      goto done;
+    }
+  }
   for (int i = 0; i < 4; i++) VPUSH(&c, c.out, (uint8_t)(TS_PACKED_MAGIC >> (8 * i)));
   rc_init(&c);
   code_all(&c, &ir, &m);
@@ -2976,11 +3363,168 @@ done:
   return result;
 }
 
-// Compare a decoded language against the original, table by table.
+// A TSLexer that feeds a fixed input and records every call the lex function
+// makes, so a compiled lex function and its packed program can be compared.
+typedef struct {
+  TSLexer base;
+  const int32_t *input;
+  uint32_t len, pos;
+  U32Vec trace;
+  Codec *codec;
+  jmp_buf stop;
+} MockLexer;
+
+static void mock_advance(TSLexer *l, bool skip) {
+  MockLexer *m = (MockLexer *)l;
+  if (m->trace.len > 4096) longjmp(m->stop, 1);  // runaway: compare the traces so far
+  VPUSH(m->codec, m->trace, (skip ? 0x10000000u : 0x20000000u) | m->pos);
+  if (m->pos < m->len) m->pos++;
+  m->base.lookahead = m->pos < m->len ? m->input[m->pos] : 0;
+}
+
+static void mock_mark_end(TSLexer *l) {
+  MockLexer *m = (MockLexer *)l;
+  VPUSH(m->codec, m->trace, 0x30000000u | m->pos);
+}
+
+static uint32_t mock_get_column(TSLexer *l) {
+  (void)l;
+  return 0;
+}
+
+static bool mock_is_at_included_range_start(const TSLexer *l) {
+  (void)l;
+  return false;
+}
+
+static bool mock_eof(const TSLexer *l) {
+  const MockLexer *m = (const MockLexer *)l;
+  return m->pos >= m->len;
+}
+
+static void mock_run(
+  MockLexer *m, bool (*fn)(TSLexer *, uint16_t), const TSPackedLexer *program, const int32_t *input,
+  uint32_t len, uint16_t state
+) {
+  m->input = input;
+  m->len = len;
+  m->pos = 0;
+  m->trace.len = 0;
+  m->base.lookahead = len ? input[0] : 0;
+  m->base.result_symbol = 0xFFFF;
+  if (setjmp(m->stop)) {
+    VPUSH(m->codec, m->trace, 0x50000000u);
+    return;
+  }
+  bool result = fn ? fn(&m->base, state) : ts_packed_lex(program, &m->base, state);
+  VPUSH(m->codec, m->trace, 0x40000000u | (result ? 1u << 16 : 0) | m->base.result_symbol);
+}
+
+// Every character a lex program compares against, plus its neighbours.
+static void lex_probe_chars(Codec *c, const TSPackedLexer *lx, U32Vec *out) {
+  const int32_t fixed[] = {0, 1, 9, 10, 13, 32, 127, 128, 255, 0x7FF, 0xFFFF, 0x10FFFF, -1};
+  for (size_t i = 0; i < sizeof fixed / sizeof *fixed; i++) VPUSH(c, *out, (uint32_t)fixed[i]);
+  for (uint32_t s = 0; s < lx->state_count; s++) {
+    const LexStateRec *st = &lx->states[s];
+    for (uint32_t i = 0; i < st->map_n; i++) {
+      uint32_t ch = lx->map_chars[st->map + i];
+      VPUSH(c, *out, ch);
+      VPUSH(c, *out, ch + 1);
+      VPUSH(c, *out, ch - 1);
+    }
+    for (uint32_t i = 0; i < st->trans_n; i++) {
+      const LexTransRec *t = &lx->trans[st->trans + i];
+      const uint32_t parts[2][2] = {{t->asserted, t->asserted_n}, {t->negated, t->negated_n}};
+      for (int p = 0; p < 2; p++) {
+        for (uint32_t j = 0; j < parts[p][1]; j++) {
+          const TSCharacterRange *r = &lx->ranges[parts[p][0] + j];
+          VPUSH(c, *out, (uint32_t)r->start);
+          VPUSH(c, *out, (uint32_t)r->start - 1);
+          VPUSH(c, *out, (uint32_t)r->end);
+          VPUSH(c, *out, (uint32_t)r->end + 1);
+        }
+      }
+    }
+  }
+  const LexSets *sets = lx->sets;
+  for (uint32_t i = 0; i < sets->count; i++) {
+    for (uint32_t j = 0; j < sets->length[i]; j++) {
+      const TSCharacterRange *r = &sets->ranges[sets->offset[i] + j];
+      VPUSH(c, *out, (uint32_t)r->start);
+      VPUSH(c, *out, (uint32_t)r->start - 1);
+      VPUSH(c, *out, (uint32_t)r->end);
+      VPUSH(c, *out, (uint32_t)r->end + 1);
+    }
+  }
+}
+
+// Run the compiled lex function and the packed program from every state on
+// every probe character (then end of input), and on pseudo-random strings of
+// probe characters, comparing what each does to the lexer.
+static bool lex_equivalent(bool (*fn)(TSLexer *, uint16_t), const TSPackedLexer *lx, uint32_t random_per_state) {
+  Codec c;
+  memset(&c, 0, sizeof c);
+  U32Vec chars = {0};
+  lex_probe_chars(&c, lx, &chars);
+  MockLexer a, b;
+  memset(&a, 0, sizeof a);
+  memset(&b, 0, sizeof b);
+  a.codec = b.codec = &c;
+  TSLexer base = {0, 0, mock_advance, mock_mark_end, mock_get_column, mock_is_at_included_range_start, mock_eof, NULL};
+  a.base = b.base = base;
+  bool ok = true;
+  uint64_t seed = 0x9e3779b97f4a7c15ull;
+  int32_t input[16];
+  for (uint32_t s = 0; s < lx->state_count + 1 && ok; s++) {
+    for (uint32_t i = 0; i <= chars.len && ok; i++) {
+      uint32_t len = i < chars.len ? 1 : 0;
+      if (len) input[0] = (int32_t)chars.data[i];
+      mock_run(&a, fn, NULL, input, len, (uint16_t)s);
+      mock_run(&b, NULL, lx, input, len, (uint16_t)s);
+      ok = a.trace.len == b.trace.len && !memcmp(a.trace.data, b.trace.data, a.trace.len * 4);
+#ifdef TS_PACKED_DEBUG
+      if (!ok) {
+        fprintf(stderr, "lex mismatch: state %u input len %u char %d\n  compiled:", s, len, len ? input[0] : -999);
+        for (uint32_t q = 0; q < a.trace.len; q++) fprintf(stderr, " %08x", a.trace.data[q]);
+        fprintf(stderr, "\n  packed:  ");
+        for (uint32_t q = 0; q < b.trace.len; q++) fprintf(stderr, " %08x", b.trace.data[q]);
+        fprintf(stderr, "\n");
+      }
+#endif
+    }
+    for (uint32_t r = 0; r < random_per_state && ok; r++) {
+      seed = mix64(seed);
+      uint32_t len = 1 + (uint32_t)(seed % 12);
+      for (uint32_t j = 0; j < len; j++) {
+        seed = mix64(seed);
+        input[j] = (int32_t)chars.data[seed % chars.len];
+      }
+      mock_run(&a, fn, NULL, input, len, (uint16_t)s);
+      mock_run(&b, NULL, lx, input, len, (uint16_t)s);
+      ok = a.trace.len == b.trace.len && !memcmp(a.trace.data, b.trace.data, a.trace.len * 4);
+    }
+  }
+  VFREE(chars);
+  VFREE(a.trace);
+  VFREE(b.trace);
+  return ok && !c.failed;
+}
+
+static bool verify_stub(TSLexer *l, uint16_t s) {
+  (void)l;
+  (void)s;
+  return false;
+}
+
+// Compare a decoded language against the original, table by table, and its
+// lex programs against the compiled lex functions.
 bool ts_packed_verify(const TSLanguage *L, const uint8_t *blob, size_t length, const char **error) {
+  const TSPackedLexer *main_lexer = NULL, *keyword_lexer = NULL;
   TSPackedFunctions fns = {
-    L->lex_fn,
-    L->keyword_lex_fn,
+    verify_stub,
+    L->keyword_lex_fn ? verify_stub : NULL,
+    &main_lexer,
+    &keyword_lexer,
     L->external_scanner.create,
     L->external_scanner.destroy,
     L->external_scanner.scan,
@@ -3068,7 +3612,10 @@ bool ts_packed_verify(const TSLanguage *L, const uint8_t *blob, size_t length, c
     for (int f = 0; f < 3; f++) CHECK(lex_field(D, s, f) == lex_field(L, s, f), "lex_modes");
   }
   CHECK(!memcmp(D->primary_state_ids, L->primary_state_ids, N * sizeof(TSStateId)), "primary_state_ids");
-  CHECK(D->lex_fn == L->lex_fn && D->keyword_lex_fn == L->keyword_lex_fn, "lex functions");
+  CHECK(D->lex_fn == verify_stub && (D->keyword_lex_fn == NULL) == (L->keyword_lex_fn == NULL), "lex functions");
+  CHECK(main_lexer && lex_equivalent(L->lex_fn, main_lexer, 64), "lex program differs from ts_lex");
+  CHECK(!L->keyword_lex_fn || (keyword_lexer && lex_equivalent(L->keyword_lex_fn, keyword_lexer, 64)),
+        "keyword lex program differs from ts_lex_keywords");
   CHECK(!memcmp(&D->external_scanner.create, &L->external_scanner.create, 5 * sizeof(void *)), "scanner functions");
   if (L->external_token_count) {
     uint32_t max_ext = 0;

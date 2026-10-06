@@ -96,7 +96,7 @@ browsers and read from disk under Node.
 ## Bundle size
 
 Because `GRAMMARS` names every language statically, a naïve rspack/webpack
-build will emit every grammar's `.wasm` + `.scm` (around 160 MB total).
+build will emit every grammar's `.wasm` + `.scm` (around 3 MB total).
 Bundlers that tree-shake based on referenced entries will only pull in
 the grammars you actually load; otherwise expect the full asset set.
 
@@ -116,15 +116,17 @@ the grammars you actually load; otherwise expect the full asset set.
 │ <grammar>.wasm  │  │  (this package)                  │
 │ one per grammar │  │  one shared copy                 │
 └─────────────────┘  └──────────────────────────────────┘
-   packed parser       session + query execution in Rust
-   tables + lexer
+   packed tables,      session + query execution in Rust
+   lexers; scanner
 ```
 
-Each grammar's parse tables ship as a compact entropy-coded blob (see
-`lib/packed/` in the repo root) that the host expands into a regular
-`TSLanguage` the first time the grammar is loaded; the expanded tables are
-byte-for-byte what `tree-sitter generate` produced, which the build verifies
-for every grammar.
+Each grammar's parse tables and lexers ship as a compact entropy-coded blob
+(see `lib/packed/` in the repo root) that the host expands into a regular
+`TSLanguage` the first time the grammar is loaded, and its lexers run in a
+shared interpreter in the host; only external scanners remain compiled into
+grammar modules. The expanded tables are byte-for-byte what
+`tree-sitter generate` produced and the lexers behave identically to the
+generated ones, which the build verifies for every grammar.
 
 One running instance of the runtime serves many grammars via a
 registry keyed by grammar ID. Each grammar is registered by handing

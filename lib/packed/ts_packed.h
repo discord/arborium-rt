@@ -9,8 +9,9 @@
 // `tree-sitter generate` emitted; `pack.c` verifies that for every grammar at
 // build time.
 //
-// The lex functions and external scanner stay compiled code in the grammar's
-// own module and are passed in through `TSPackedFunctions`.
+// The blob also carries the lex functions as data, run by `ts_packed_lex`;
+// the external scanner stays compiled code in the grammar's own module and is
+// passed in through `TSPackedFunctions`.
 
 #ifndef TS_PACKED_H_
 #define TS_PACKED_H_
@@ -25,16 +26,25 @@ extern "C" {
 
 typedef struct TSLanguage TSLanguage;
 typedef struct TSLexer TSLexer;
+typedef struct TSPackedLexer TSPackedLexer;
 
 typedef struct {
+  // The language's lex functions. When the blob carries the lexers as data,
+  // these are stubs that call ts_packed_lex() with the program the loader
+  // stores through `lex_program` / `keyword_lex_program`.
   bool (*lex_fn)(TSLexer *, uint16_t);
   bool (*keyword_lex_fn)(TSLexer *, uint16_t);
+  const TSPackedLexer **lex_program;
+  const TSPackedLexer **keyword_lex_program;
   void *(*external_scanner_create)(void);
   void (*external_scanner_destroy)(void *);
   bool (*external_scanner_scan)(void *, TSLexer *, const bool *);
   unsigned (*external_scanner_serialize)(void *, char *);
   void (*external_scanner_deserialize)(void *, const char *, unsigned);
 } TSPackedFunctions;
+
+// Run a packed lex program; behaves exactly like the generated lex function.
+bool ts_packed_lex(const TSPackedLexer *program, TSLexer *lexer, uint16_t state);
 
 // Expand a packed blob into a newly allocated language. Returns NULL if the
 // blob is malformed or allocation fails. The language is never freed.
