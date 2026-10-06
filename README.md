@@ -100,7 +100,7 @@ cd arborium-rt
 ./scripts/arborium-rt build wasm grammars     # build all grammars (browser)
 ./scripts/arborium-rt package wasm host       # stage host + runtime wasms into the wasm package
 ./scripts/arborium-rt package wasm grammars   # stage grammars + generate the GRAMMARS index
-pnpm install
+pnpm install --frozen-lockfile
 pnpm -r --filter='!@discord/arborium-rt-node' build
 pnpm -r --filter='!@discord/arborium-rt-node' test
 ```
