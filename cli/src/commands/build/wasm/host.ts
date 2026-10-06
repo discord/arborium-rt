@@ -54,6 +54,14 @@ const EXTRA_LIBC_EXPORTS = [
 	// without this export the SIDE_MODULE's `iswpunct` import resolves to
 	// undefined and traps when the parser first reaches that scanner state.
 	"_iswpunct",
+	// Also imported by grammar scanners (the postscript scanner calls
+	// isxdigit and tolower on every hex/numeric literal; several scanners'
+	// assert() calls import __assert_fail) but not in stdlib-symbols.txt.
+	// Without them the import resolves to undefined and the first call
+	// throws "resolved is not a function".
+	"_isxdigit",
+	"_tolower",
+	"___assert_fail",
 	"_getcwd",
 	"_getentropy",
 	"_getenv",
