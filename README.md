@@ -79,7 +79,16 @@ for the full consumer API. To use the native Node module instead, see
 
 ## Building from source
 
-### Required: the browser (wasm) package
+### Prerequisites
+
+- `emcc`
+- Rust Nightly
+- Node >= 22, pnpm >= 9
+- askalono
+  - `cargo install --locked askalono-cli`
+- Optional, Node only: C/C++ compiler
+
+### Browser (wasm) package
 
 ```sh
 git clone --recurse-submodules <this-repo>
@@ -95,7 +104,7 @@ pnpm -r --filter='!@discord/arborium-rt-node' build
 pnpm -r --filter='!@discord/arborium-rt-node' test
 ```
 
-### Optional: the Node native addon
+### Node native addon
 
 Only needed to work on `@discord/arborium-rt-node`. Run after the steps above.
 
