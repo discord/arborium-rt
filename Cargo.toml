@@ -18,7 +18,7 @@ exclude = ["third_party"]
 
 [dependencies]
 arborium-plugin-runtime = { path = "third_party/arborium/crates/arborium-plugin-runtime" }
-arborium-tree-sitter    = { path = "third_party/arborium/crates/arborium-tree-sitter" }
+arborium-tree-sitter    = { path = "third_party/arborium/crates/arborium-tree-sitter", features = ["regex-lite"] }
 arborium-wire           = { path = "third_party/arborium/crates/arborium-wire" }
 arborium-highlight      = { path = "third_party/arborium/crates/arborium-highlight", default-features = false }
 arborium-theme          = { path = "third_party/arborium/crates/arborium-theme", default-features = false }
