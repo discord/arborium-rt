@@ -8,7 +8,8 @@
 /// <reference types="tree-sitter-cli/dsl" />
 // @ts-check
 
-const lua = require('@muniftanjim/tree-sitter-lua/grammar');
+//const lua = require('@muniftanjim/tree-sitter-lua/grammar');
+const lua = require('../../../../lua/build/grammar-stage/grammar/grammar.js');
 
 const PREC = {
   ASSIGN: 0,
