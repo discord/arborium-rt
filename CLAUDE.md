@@ -504,7 +504,8 @@ means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
   own target in the environment:
     - `arborium-rt build wasm runtime` → `arborium-rt-wasm` for
       `wasm32-unknown-emscripten` with `CARGO_BUILD_TARGET` +
-      `CARGO_UNSTABLE_BUILD_STD=std,panic_abort` (the `SIDE_MODULE`/
+      `CARGO_UNSTABLE_BUILD_STD=std,panic_abort` and
+      `CARGO_UNSTABLE_BUILD_STD_FEATURES=optimize_for_size` (the `SIDE_MODULE`/
       `EXPORTED_FUNCTIONS` link-args come from `.cargo/config.toml`). Needs emcc.
     - `arborium-rt build node` → `arborium-rt-node` for the host triple with
       `CARGO_BUILD_TARGET=<host>` (no build-std; the host links prebuilt std).
