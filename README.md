@@ -83,6 +83,7 @@ for the full consumer API. To use the native Node module instead, see
 
 - `emcc`
 - Rust Nightly
+  - `rustup component add rust-src --toolchain nightly`
 - Node >= 22, pnpm >= 9
 - askalono
   - `cargo install --locked askalono-cli`
