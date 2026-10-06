@@ -178,9 +178,17 @@ export function buildGrammar(
 					],
 					{ cwd: ctx.buildDir },
 				);
-				await run(task.stdout(), "node", ["pack.cjs", "src/parser_packed.c"], {
-					cwd: ctx.buildDir,
-				});
+				// --liftoff-only: the lex equivalence check calls the compiled
+				// ts_lex enough to tier it up, and TurboFan exhausts its zone
+				// memory optimizing the largest lex functions (vim's is ~32k
+				// lines). The baseline compiler finishes the whole check in well
+				// under a second.
+				await run(
+					task.stdout(),
+					"node",
+					["--liftoff-only", "pack.cjs", "src/parser_packed.c"],
+					{ cwd: ctx.buildDir },
+				);
 			},
 		},
 		{
