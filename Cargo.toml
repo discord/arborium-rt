@@ -27,7 +27,7 @@ serde_json              = { version = "1.0", default-features = false, features 
 
 [profile.release]
 opt-level = "z"
-lto = false
+lto = true
 codegen-units = 1
 panic = "abort"
 strip = false
