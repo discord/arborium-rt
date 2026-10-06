@@ -9,3 +9,6 @@ grammars:
     tier: 4
 
     description: "Luau Grammar"
+
+    dependencies:
+      - npm: "tree-sitter-lua"
