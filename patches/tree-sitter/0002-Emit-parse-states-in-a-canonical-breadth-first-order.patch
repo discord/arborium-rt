@@ -1,0 +1,126 @@
+From 23dfd437e342a80fef83a7b8cf6b6ed4571aaa2f Mon Sep 17 00:00:00 2001
+From: AJ <aj@discordapp.com>
+Date: Tue, 6 Oct 2026 17:46:34 +0000
+Subject: [PATCH] Emit parse states in a canonical breadth-first order
+
+When TREE_SITTER_SPARSE_ONLY is set, renumber parse states before rendering
+so states 0 and 1 keep their ids and every other state is numbered the first
+time it is referenced while walking states in id order, entries in ascending
+symbol id order, and shift actions in action order. Unreachable states are
+appended in their original order whenever the walk runs out.
+
+State numbering is arbitrary to the runtime. With every state in the sparse
+table, the descending-size reorder no longer serves a purpose, and a
+canonical order lets arborium-rt's packed table format imply most shift and
+goto targets instead of storing them.
+---
+ crates/generate/src/render.rs | 86 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 86 insertions(+)
+
+diff --git a/crates/generate/src/render.rs b/crates/generate/src/render.rs
+index 1b2ad95..f298f92 100644
+--- a/crates/generate/src/render.rs
++++ b/crates/generate/src/render.rs
+@@ -117,6 +117,9 @@ struct Metadata {
+ 
+ impl Generator {
+     fn generate(mut self) -> RenderResult<String> {
++        if std::env::var_os("TREE_SITTER_SPARSE_ONLY").is_some() {
++            self.canonicalize_state_order();
++        }
+         self.init();
+         self.add_header();
+         self.add_includes();
+@@ -186,6 +189,89 @@ impl Generator {
+         Ok(self.buffer)
+     }
+ 
++    /// arborium-rt: renumber parse states in a canonical breadth-first order.
++    ///
++    /// States 0 (error) and 1 (start) keep their ids. Every other state gets
++    /// the next id the first time it is referenced while walking states in id
++    /// order, visiting each state's entries in ascending symbol id order (the
++    /// order `add_symbol_enum` assigns) and each entry's shift actions in
++    /// action order. States nothing reaches this way are appended in their
++    /// original order whenever the walk runs out.
++    ///
++    /// State numbering is arbitrary to the runtime. With every state in the
++    /// sparse table, `reorder_states_by_descending_size` (an unstable sort) no
++    /// longer serves a purpose, and a canonical order lets arborium-rt's
++    /// packed table format imply most shift and goto targets instead of
++    /// storing them.
++    fn canonicalize_state_order(&mut self) {
++        let mut symbol_order = HashMap::new();
++        symbol_order.insert(Symbol::end(), 0);
++        symbol_order.insert(Symbol::end_of_nonterminal_extra(), 0);
++        let mut i = 1;
++        for symbol in &self.parse_table.symbols {
++            if *symbol != Symbol::end() {
++                symbol_order.insert(*symbol, i);
++                i += 1;
++            }
++        }
++
++        let state_count = self.parse_table.states.len();
++        let mut new_ids = vec![usize::MAX; state_count];
++        let mut old_ids = Vec::with_capacity(state_count);
++        for state_id in 0..state_count.min(2) {
++            new_ids[state_id] = old_ids.len();
++            old_ids.push(state_id);
++        }
++        let mut targets = Vec::new();
++        let mut next = 0;
++        while next < state_count {
++            if next == old_ids.len() {
++                let state_id = new_ids.iter().position(|id| *id == usize::MAX).unwrap();
++                new_ids[state_id] = old_ids.len();
++                old_ids.push(state_id);
++            }
++            let state = &self.parse_table.states[old_ids[next]];
++            next += 1;
++
++            targets.clear();
++            for (symbol, entry) in &state.terminal_entries {
++                for action in &entry.actions {
++                    if let ParseAction::Shift { state, .. } = action {
++                        targets.push((symbol_order[symbol], *state));
++                    }
++                }
++            }
++            for (symbol, action) in &state.nonterminal_entries {
++                if let GotoAction::Goto(state) = action {
++                    targets.push((symbol_order[symbol], *state));
++                }
++            }
++            // Stable, so a symbol's shift actions keep their action order.
++            targets.sort_by_key(|(order, _)| *order);
++            for (_, target) in &targets {
++                if new_ids[*target] == usize::MAX {
++                    new_ids[*target] = old_ids.len();
++                    old_ids.push(*target);
++                }
++            }
++        }
++
++        let mut states = std::mem::take(&mut self.parse_table.states)
++            .into_iter()
++            .map(Some)
++            .collect::<Vec<_>>();
++        self.parse_table.states = old_ids
++            .iter()
++            .enumerate()
++            .map(|(new_id, old_id)| {
++                let mut state = states[*old_id].take().unwrap();
++                state.update_referenced_states(|id, _| new_ids[id]);
++                state.id = new_id;
++                state
++            })
++            .collect();
++    }
++
+     fn init(&mut self) {
+         let mut symbol_identifiers = HashSet::new();
+         for i in 0..self.parse_table.symbols.len() {
+-- 
+2.50.1
+

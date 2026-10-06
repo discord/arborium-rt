@@ -95,6 +95,12 @@ export interface Paths {
 	/** `cli/` — this CLI's own package. */
 	readonly cliPackageDir: string;
 	readonly bindingRoot: string;
+	/**
+	 * `lib/packed/` — the packed language table codec. `ts_packed.c` is
+	 * compiled into the MAIN_MODULE host (decoder) and, with `pack.c`, into
+	 * the per-grammar build-time packer (encoder).
+	 */
+	readonly packedRoot: string;
 }
 
 export function paths(repoRoot: string = findRepoRoot()): Paths {
@@ -114,6 +120,7 @@ export function paths(repoRoot: string = findRepoRoot()): Paths {
 			"crates",
 			"arborium-tree-sitter",
 		),
+		packedRoot: join(repoRoot, "lib", "packed"),
 		arboriumPatchesDir: join(repoRoot, "patches", "arborium"),
 		treeSitterRoot,
 		treeSitterPatchesDir: join(repoRoot, "patches", "tree-sitter"),

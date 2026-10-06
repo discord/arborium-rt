@@ -135,12 +135,54 @@ export function buildGrammar(
 			},
 		},
 		{
-			title: "compiling src/parser.c (C)",
+			title: "packing parser tables",
 			async task(ctx, task) {
 				// Copy grammar-shipped headers + auxiliary C/C++ sources into src/ so
 				// scanner.c's `#include`s resolve during compile.
 				await copySupportFiles(ctx.grammarDir, join(ctx.buildDir, "src"));
 
+				// Build the packer against this grammar's parser.c and run it under
+				// Node. It encodes every table in the generated TSLanguage into one
+				// compact blob, decodes it again and checks the result matches the
+				// original byte for byte, then writes src/parser_packed.c: parser.c
+				// with tree_sitter_<lang>() replaced by one that expands the blob
+				// through the host's ts_packed_language_load(). The original tables
+				// end up unreferenced, so the linker drops them. External scanner
+				// functions are never called while packing, so they stay undefined.
+				await run(
+					task.stdout(),
+					"emcc",
+					[
+						"-O1",
+						"-w",
+						"-DTS_PACKED_GRAMMAR_HEADER",
+						"-DTS_PACKED_ENCODER",
+						'-DPARSER_C="parser.c"',
+						`-DLANGUAGE_SYMBOL=${ctx.cSymbol}`,
+						"-I",
+						"src",
+						"-I",
+						p.packedRoot,
+						join(p.packedRoot, "pack.c"),
+						join(p.packedRoot, "ts_packed.c"),
+						"-sENVIRONMENT=node",
+						"-sNODERAWFS=1",
+						"-sALLOW_MEMORY_GROWTH=1",
+						"-sSTACK_SIZE=4MB",
+						"-sERROR_ON_UNDEFINED_SYMBOLS=0",
+						"-o",
+						"pack.cjs",
+					],
+					{ cwd: ctx.buildDir },
+				);
+				await run(task.stdout(), "node", ["pack.cjs", "src/parser_packed.c"], {
+					cwd: ctx.buildDir,
+				});
+			},
+		},
+		{
+			title: "compiling src/parser_packed.c (C)",
+			async task(ctx, task) {
 				await run(
 					task.stdout(),
 					"emcc",
@@ -149,9 +191,11 @@ export function buildGrammar(
 						"-fPIC",
 						"-I",
 						"src",
+						"-I",
+						p.packedRoot,
 						"-std=c11",
 						"-c",
-						"src/parser.c",
+						"src/parser_packed.c",
 						"-o",
 						"parser.o",
 					],

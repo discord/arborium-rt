@@ -105,7 +105,8 @@ the grammars you actually load; otherwise expect the full asset set.
 ```
 ┌─────────────────────────────────┐
 │ web-tree-sitter.wasm            │   MAIN_MODULE=2, upstream tree-sitter.
-│                                 │   Ships the C runtime once (~200 KB).
+│                                 │   Ships the C runtime once (~230 KB),
+│                                 │   plus the packed-table decoder.
 └──────────────▲──────────────────┘
                │ loadWebAssemblyModule
        ┌───────┴────────┐
@@ -115,8 +116,15 @@ the grammars you actually load; otherwise expect the full asset set.
 │ <grammar>.wasm  │  │  (this package)                  │
 │ one per grammar │  │  one shared copy                 │
 └─────────────────┘  └──────────────────────────────────┘
-   parser tables       session + query execution in Rust
+   packed parser       session + query execution in Rust
+   tables + lexer
 ```
+
+Each grammar's parse tables ship as a compact entropy-coded blob (see
+`lib/packed/` in the repo root) that the host expands into a regular
+`TSLanguage` the first time the grammar is loaded; the expanded tables are
+byte-for-byte what `tree-sitter generate` produced, which the build verifies
+for every grammar.
 
 One running instance of the runtime serves many grammars via a
 registry keyed by grammar ID. Each grammar is registered by handing

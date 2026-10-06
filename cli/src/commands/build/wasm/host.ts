@@ -39,6 +39,9 @@ const EXTRA_TS_EXPORTS = [
 	"_ts_query_cursor_next_match",
 	"_ts_node_start_byte",
 	"_ts_node_end_byte",
+	// Expands a grammar SIDE_MODULE's packed tables (lib/packed/) into a
+	// TSLanguage. Every grammar built by `build wasm grammar` imports it.
+	"_ts_packed_language_load",
 ];
 
 /**
@@ -220,6 +223,7 @@ export function buildWasmHost() {
 						join(p.hostWasmOut, "web-tree-sitter.mjs"),
 						"src/lib.c",
 						"binding_web/lib/tree-sitter.c",
+						join(p.packedRoot, "ts_packed.c"),
 					],
 					{ cwd: p.bindingRoot },
 				);

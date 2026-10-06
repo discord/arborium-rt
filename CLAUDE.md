@@ -316,6 +316,46 @@ short slot strings like `"k"`, `"f"`, `"s"` that consumers map to colors
 themselves. arborium-rt does **not** bundle any theme CSS; styling is
 the consumer's responsibility.
 
+### Packed language tables (`lib/packed/`)
+
+A generated `parser.c` is ~90% static tables, and in the wasm build those
+tables were ~95% of every grammar SIDE_MODULE (cpp: 2.2 MB of 2.35 MB).
+`lib/packed/` replaces them with a compact blob that the host expands into
+an ordinary `TSLanguage` the first time a grammar's `tree_sitter_<lang>()`
+is called:
+
+- **`ts_packed.c`** — the codec: an adaptive binary range coder plus one
+  model per table, written once and run in both directions (encoding reads
+  each value from an intermediate representation extracted from the real
+  `TSLanguage`; decoding writes it back). The parse table is modelled as
+  tree-sitter builds it: LR(1) states are copies of far fewer LR(0) cores
+  (`primary_state_ids` already names them), so the model codes each state's
+  structure against the previous state with the same core, each shift/goto
+  target as a prediction from earlier states of that core that agree so far
+  (a per-core trie) or from any earlier state sharing its targets, and each
+  reduce action's lookahead set mostly as a reference to an earlier set.
+  Action list ids, the grouped `small_parse_table` rows,
+  `small_parse_table_map`, `primary_state_ids`, lex modes (a function of the
+  valid-token set) and every `reusable` flag (a token-overlap relation plus
+  per-state exceptions) are re-derived exactly as `render.rs` derives them.
+  Compiled without `TS_PACKED_ENCODER` into the MAIN_MODULE host, which
+  exports `ts_packed_language_load`.
+- **`pack.c`** — the build-time packer. `build wasm grammar` compiles it with
+  the grammar's `parser.c` and `ts_packed.c` (with `TS_PACKED_ENCODER`) for
+  Node, runs it, and it encodes the tables, **decodes them again and fails
+  the build unless every table matches the original byte for byte**, then
+  writes `src/parser_packed.c`: `parser.c` with `tree_sitter_<lang>()`
+  renamed and replaced by one that loads the blob. Linking that file leaves
+  the original tables unreferenced, so the linker drops them; the lex
+  functions and external scanner stay compiled code.
+
+The format is internal to a given host build — grammars and the host
+always ship together in one package, so there's no versioning beyond the
+blob's magic. Changing a model changes the format: rebuild the host and
+every grammar together. The Node addon is unaffected; it compiles
+`parser.c` directly. Build with `-DTS_PACKED_STATS` (and `-lm`) to have
+`pack.c` print bytes and decisions per model component.
+
 ### Dev CLI (`cli/`)
 
 Private, unpublished workspace package. Run directly from source via tsx
@@ -392,6 +432,13 @@ Two pinned submodules live under `third_party/`:
   which is one-shot per file. The arborium-tree-sitter runtime already
   handles `large_state_count == 0` (every lookup goes through the
   sparse path; cf. `crates/arborium-tree-sitter/src/language.h:78`).
+  A second patch (`patches/tree-sitter/0002`, also gated on
+  `TREE_SITTER_SPARSE_ONLY`) renumbers parse states in a canonical
+  breadth-first order in `render.rs` instead of the minimizer's
+  descending-size order, which only mattered for picking dense states.
+  State numbers are arbitrary to the runtime; the canonical order lets the
+  packed table format (see "Packed language tables") imply most shift and
+  goto targets.
   Note that **only the CLI** comes from this submodule: the tree-sitter C
   that actually runs is arborium's vendored copy
   (`crates/arborium-tree-sitter/src/`), compiled into the MAIN_MODULE host
@@ -401,8 +448,8 @@ Two pinned submodules live under `third_party/`:
 
 Patches live as mbox files under `patches/<submodule>/` (`git
 format-patch` output). Most are trivial target guards or opt-in codegen
-flags. The exception is the fuel budget — `patches/tree-sitter/0002` plus
-`patches/arborium/0003` and `0004` — which does change behavior: query
+flags. The exception is the fuel budget — `patches/arborium/0003` and
+`0004` — which does change behavior: query
 execution now stops when the caller's fuel allotment is spent, returning
 partial spans. That is the DoS guard against quadratic highlight queries
 (kotlin/swift/javascript chained member access), so it is load-bearing, not
@@ -431,7 +478,9 @@ bootstrap after bumping either submodule or tweaking a patch.
   package's `dist/runtime/arborium_emscripten_runtime.wasm` (the published filename).
 - `target/host-wasm/web-tree-sitter.{wasm,mjs}` — MAIN_MODULE host.
 - `target/grammars/<lang>/` — `tree-sitter-<lang>.wasm` +
-  flattened `.scm` query files (written by `build wasm grammar`).
+  flattened `.scm` query files (written by `build wasm grammar`). The
+  build dir under it keeps the generated `src/parser.c`, the packer
+  (`pack.cjs`) and the `src/parser_packed.c` it wrote.
 - `packages/arborium-rt-wasm/dist/grammars/<lang>/` — per-grammar assets
   (the wasm + flattened `.scm` files). Written by `package wasm grammars`;
   referenced by the generated `dist/grammars.js` via `new URL(...)`.
@@ -484,6 +533,12 @@ means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
   vendored dep grammars' `def/grammar/` dirs into the build dir and
   exposing `NODE_PATH` — but only for grammars already in the
   arborium corpus. Third-party upstream deps are not yet wired up.
+- **Packed tables are verified, not trusted.** `build wasm grammar`
+  fails if `pack.cjs` exits non-zero, which it does whenever the decoded
+  tables differ from the generated ones (or the generator emitted something
+  the model doesn't support, e.g. dense states or non-canonical state
+  order). A grammar that fails here needs a model fix in `ts_packed.c`, not
+  a fallback.
 - **Sparse-only parser tables.** `build wasm grammar` always sets
   `TREE_SITTER_SPARSE_ONLY=1` when invoking the patched tree-sitter CLI.
   The arborium-tree-sitter runtime treats that as the supported case —

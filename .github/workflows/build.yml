@@ -201,7 +201,8 @@ jobs:
   # wasm and uploads target/grammars/<lang>/ for the package job to merge.
   # Needs emcc + the patched tree-sitter CLI (from `tree-sitter-cli`) + askalono
   # (fetch-license). No Rust toolchain — `build wasm grammars` compiles parser.c
-  # with emcc and flattens queries; it never invokes cargo.
+  # with emcc, packs its tables (lib/packed/pack.c, built with emcc and run
+  # under Node) and flattens queries; it never invokes cargo.
   grammars-wasm:
     needs: tree-sitter-cli
     runs-on: ubuntu-latest
