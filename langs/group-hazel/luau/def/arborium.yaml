@@ -7,7 +7,8 @@ grammars:
     name: Luau
     tag: code
     tier: 4
-
+    has_scanner: true
+    
     description: "Luau Grammar"
 
     dependencies:
