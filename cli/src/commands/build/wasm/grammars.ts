@@ -4,8 +4,9 @@
 //
 // Grammars fail for a variety of reasons (tree-sitter-generate ABI mismatches,
 // missing upstream node_modules that aren't declared in arborium.yaml,
-// structurally-odd vendored layouts). Each failure is logged but doesn't
-// abort the run; the closing summary names winners and losers.
+// structurally-odd vendored layouts). A failing step aborts that grammar's
+// remaining steps but not the other grammars; once every grammar has been
+// attempted, the run fails (non-zero exit) naming the grammars that broke.
 //
 // Per-grammar work runs in parallel (bounded by `os.availableParallelism()`)
 // — each grammar's stderr is line-prefixed with its id so interleaved tool
@@ -38,6 +39,8 @@ export interface BuildAllResult {
 interface BuildAllContext {
 	index: Map<string, GrammarIndexEntry>;
 	targets: string[];
+	/** The per-grammar list; `tasks[i]` builds `targets[i]`. */
+	perGrammar: Listr<BuildAllContext>;
 }
 
 export function buildAll(args: BuildAllArgs = {}) {
@@ -61,7 +64,7 @@ export function buildAll(args: BuildAllArgs = {}) {
 		},
 		{
 			async task(ctx, task) {
-				return task.newListr(
+				ctx.perGrammar = task.newListr(
 					ctx.targets.map((id) => ({
 						async task(_ctx, task) {
 							// `concurrent: false` is load-bearing: listr2 merges the parent
@@ -71,10 +74,14 @@ export function buildAll(args: BuildAllArgs = {}) {
 							// outer `concurrent: availableParallelism()` and run a grammar's
 							// build + package steps in parallel. The per-grammar steps are
 							// strictly ordered (rm/stage → generate → compile → link →
-							// package), so they must stay sequential.
+							// package), so they must stay sequential. `exitOnError: true`
+							// likewise overrides the outer `false`, so a failed step (e.g.
+							// `tree-sitter generate`) stops this grammar instead of running
+							// the compile/link/package steps against missing outputs.
 							return task.newListr(buildLang(args, id), {
 								ctx,
 								concurrent: false,
+								exitOnError: true,
 							});
 						},
 					})),
@@ -84,6 +91,21 @@ export function buildAll(args: BuildAllArgs = {}) {
 						exitOnError: false,
 					},
 				);
+				return ctx.perGrammar;
+			},
+		},
+		{
+			// The per-grammar list swallows failures so every grammar gets
+			// attempted; surface them here so the command (and CI) fails.
+			async task(ctx) {
+				const failed = ctx.targets.filter((_, i) =>
+					ctx.perGrammar.tasks[i]?.hasFailed(),
+				);
+				if (failed.length > 0) {
+					throw new Error(
+						`${failed.length} of ${ctx.targets.length} grammar(s) failed: ${failed.join(", ")}`,
+					);
+				}
 			},
 		},
 	]);
