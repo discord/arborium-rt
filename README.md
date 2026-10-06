@@ -88,7 +88,7 @@ cd arborium-rt
 ./scripts/arborium-rt build wasm grammars  # build all grammars (browser)
 ./scripts/arborium-rt build node grammars  # stage Node addon grammar sources
 ./scripts/arborium-rt build node           # link the statically-linked Node addon
-pnpm install && pnpm -r build && pnpm -r test
+pnpm install --frozen-lockfile && pnpm -r build && pnpm -r test
 ```
 
 ## License
