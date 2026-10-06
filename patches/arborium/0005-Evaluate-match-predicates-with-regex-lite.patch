@@ -1,0 +1,90 @@
+From 29854ed6dd951a3fa1b556bae422624abfb1eb53 Mon Sep 17 00:00:00 2001
+From: AJ <aj@discordapp.com>
+Date: Tue, 6 Oct 2026 17:25:38 +0000
+Subject: [PATCH] Evaluate #match? predicates with regex-lite
+
+Add an opt-in `regex-lite` feature to arborium-tree-sitter that compiles
+`#match?` / `#not-match?` / `#any-match?` predicates with regex-lite
+instead of regex. The regex crate pulls in regex-automata, regex-syntax,
+aho-corasick and the Unicode class tables, which dominate the size of the
+emscripten runtime SIDE_MODULE. Every regex in the bundled queries is a
+simple ASCII pattern, and regex-lite is still linear-time, so the DoS
+properties are unchanged. `\w`, `\d` and `\s` match ASCII only.
+
+Default behavior is unchanged; arborium-rt enables the feature.
+---
+ crates/arborium-tree-sitter/Cargo.stpl.toml   |  5 ++++
+ .../arborium-tree-sitter/binding_rust/lib.rs  | 27 +++++++++++++++++--
+ 2 files changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/crates/arborium-tree-sitter/Cargo.stpl.toml b/crates/arborium-tree-sitter/Cargo.stpl.toml
+index a6e6ed7..41422ff 100644
+--- a/crates/arborium-tree-sitter/Cargo.stpl.toml
++++ b/crates/arborium-tree-sitter/Cargo.stpl.toml
+@@ -24,10 +24,15 @@ ignored = ["arborium-sysroot"]
+ [features]
+ default = ["std"]
+ std = ["regex/std", "regex/perf", "regex-syntax/unicode"]
++# Evaluate `#match?` predicates with regex-lite instead of regex. regex-lite
++# has no Unicode tables or literal/DFA optimizations, so it is a fraction of
++# the code size; it is still linear-time. `\w`/`\d`/`\s` match ASCII only.
++regex-lite = ["dep:regex-lite"]
+ 
+ [dependencies]
+ regex = { version = "1.11.1", default-features = false, features = ["unicode"] }
+ regex-syntax = { version = "0.8.5", default-features = false }
++regex-lite = { version = "0.1.6", optional = true }
+ tree-sitter-language = "0.1"
+ streaming-iterator = "0.1.9"
+ 
+diff --git a/crates/arborium-tree-sitter/binding_rust/lib.rs b/crates/arborium-tree-sitter/binding_rust/lib.rs
+index 4116984..4665137 100644
+--- a/crates/arborium-tree-sitter/binding_rust/lib.rs
++++ b/crates/arborium-tree-sitter/binding_rust/lib.rs
+@@ -493,10 +493,33 @@ pub enum QueryErrorKind {
+ enum TextPredicateCapture {
+     EqString(u32, Box<str>, bool, bool),
+     EqCapture(u32, u32, bool, bool),
+-    MatchString(u32, regex::bytes::Regex, bool, bool),
++    MatchString(u32, QueryRegex, bool, bool),
+     AnyString(u32, Box<[Box<str>]>, bool),
+ }
+ 
++#[cfg(not(feature = "regex-lite"))]
++type QueryRegex = regex::bytes::Regex;
++
++/// `#match?` regex backed by regex-lite, which only matches `&str`. Node text
++/// that isn't valid UTF-8 is matched lossily.
++#[cfg(feature = "regex-lite")]
++#[derive(Debug)]
++struct QueryRegex(regex_lite::Regex);
++
++#[cfg(feature = "regex-lite")]
++impl QueryRegex {
++    fn new(pattern: &str) -> Result<Self, regex_lite::Error> {
++        regex_lite::Regex::new(pattern).map(Self)
++    }
++
++    fn is_match(&self, text: &[u8]) -> bool {
++        match core::str::from_utf8(text) {
++            Ok(text) => self.0.is_match(text),
++            Err(_) => self.0.is_match(&String::from_utf8_lossy(text)),
++        }
++    }
++}
++
+ // TODO: Remove this struct at some point. If `core::str::lossy::Utf8Lossy`
+ // is ever stabilized.
+ pub struct LossyUtf8<'a> {
+@@ -2647,7 +2670,7 @@ impl Query {
+                         let regex = &string_values[p[2].value_id as usize];
+                         text_predicates.push(TextPredicateCapture::MatchString(
+                             p[1].value_id,
+-                            regex::bytes::Regex::new(regex).map_err(|_| {
++                            QueryRegex::new(regex).map_err(|_| {
+                                 predicate_error(row, format!("Invalid regex '{regex}'"))
+                             })?,
+                             is_positive,
+-- 
+2.50.1
+

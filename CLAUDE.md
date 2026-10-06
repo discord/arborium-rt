@@ -360,10 +360,15 @@ Two pinned submodules live under `third_party/`:
       tick `FUEL_PER_OPERATION + FUEL_PER_LIVE_STATE × live states` and
       breaks when the caller's allotment is spent
       (`parse_with_fuel` / `parse_utf16_with_fuel`). Unpublished upstream.
-    - `arborium-tree-sitter` — **patched** twice: to skip static
+    - `arborium-tree-sitter` — **patched** three times: to skip static
       tree-sitter C linking on emscripten (the MAIN_MODULE resolves those
-      symbols), and to publish the cursor's in-progress match count on
-      `TSQueryCursorState` so the fuel meter can weight by it.
+      symbols), to publish the cursor's in-progress match count on
+      `TSQueryCursorState` so the fuel meter can weight by it, and to add a
+      `regex-lite` feature (enabled by the root `Cargo.toml`) that compiles
+      `#match?` predicates with regex-lite instead of regex. The regex crate's
+      automata, literal optimizations and Unicode tables were ~80% of the
+      runtime SIDE_MODULE; every bundled query regex is a simple ASCII
+      pattern, and regex-lite is still linear-time.
     - `arborium-wire` — **patched** to carry `fuel_used` / `out_of_fuel`
       on both `ParseResult` types. Unpublished upstream.
     - `arborium-highlight`, `arborium-theme` — consumed with
@@ -421,7 +426,7 @@ bootstrap after bumping either submodule or tweaking a patch.
 ### Target layout
 
 - `target/wasm32-unknown-emscripten/release/arborium_rt_wasm.wasm`
-  — Rust SIDE_MODULE output (~1.1 MB uncompressed), emitted by the
+  — Rust SIDE_MODULE output (~230 KB uncompressed), emitted by the
   `arborium-rt-wasm` cdylib. `package wasm host` copies it into the runtime
   package's `dist/runtime/arborium_emscripten_runtime.wasm` (the published filename).
 - `target/host-wasm/web-tree-sitter.{wasm,mjs}` — MAIN_MODULE host.
