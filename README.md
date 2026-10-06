@@ -79,17 +79,34 @@ for the full consumer API. To use the native Node module instead, see
 
 ## Building from source
 
+### Required: the browser (wasm) package
+
 ```sh
 git clone --recurse-submodules <this-repo>
 cd arborium-rt
-./scripts/arborium-rt bootstrap     # apply patches + render Cargo manifests
-./scripts/arborium-rt build wasm runtime   # arborium_rt_wasm.wasm (SIDE_MODULE)
-./scripts/arborium-rt build wasm host      # web-tree-sitter.{wasm,mjs}
-./scripts/arborium-rt build wasm grammars  # build all grammars (browser)
-./scripts/arborium-rt build node grammars  # stage Node addon grammar sources
-./scripts/arborium-rt build node           # link the statically-linked Node addon
-pnpm install --frozen-lockfile && pnpm -r build && pnpm -r test
+./scripts/arborium-rt bootstrap               # apply patches + render Cargo manifests
+./scripts/arborium-rt build wasm runtime      # arborium_rt_wasm.wasm (SIDE_MODULE)
+./scripts/arborium-rt build wasm host         # web-tree-sitter.{wasm,mjs}
+./scripts/arborium-rt build wasm grammars     # build all grammars (browser)
+./scripts/arborium-rt package wasm host       # stage host + runtime wasms into the wasm package
+./scripts/arborium-rt package wasm grammars   # stage grammars + generate the GRAMMARS index
+pnpm install --frozen-lockfile
+pnpm -r --filter='!@discord/arborium-rt-node' build
+pnpm -r --filter='!@discord/arborium-rt-node' test
 ```
+
+### Optional: the Node native addon
+
+Only needed to work on `@discord/arborium-rt-node`. Run after the steps above.
+
+```sh
+./scripts/arborium-rt build node grammars     # stage Node addon grammar sources
+./scripts/arborium-rt build node              # link the statically-linked Node addon
+pnpm --filter @discord/arborium-rt-node build
+pnpm --filter @discord/arborium-rt-node test
+```
+
+Once both are built, `pnpm -r build && pnpm -r test` covers every package.
 
 ## License
 
