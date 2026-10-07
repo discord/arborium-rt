@@ -100,6 +100,54 @@ build will emit every grammar's `.wasm` + `.scm` (around 160 MB total).
 Bundlers that tree-shake based on referenced entries will only pull in
 the grammars you actually load; otherwise expect the full asset set.
 
+### Serving compressed
+
+Grammar wasm is ~90% parse tables, which compress very well — but how well
+depends on the encoder. Measured over all 102 grammars in the 0.1.9 release
+(82.9 MB raw):
+
+| Encoding                       | Total   | vs gzip -6 |
+| ------------------------------ | ------- | ---------- |
+| gzip -6 (typical on-the-fly)   | 9.23 MB | —          |
+| gzip -9                        | 9.14 MB | −1%        |
+| brotli -5 (typical on-the-fly) | 7.33 MB | −21%       |
+| zstd -19                       | 6.78 MB | −27%       |
+| **brotli -11**                 | 6.37 MB | **−31%**   |
+
+Brotli at quality 11 is too slow for a server or CDN to run per request, so
+compress the grammar `.wasm` files **at build time** and serve the
+precompressed copies with `Content-Encoding: br` (e.g. nginx `brotli_static`,
+Caddy `precompressed br`, or your CDN's precompressed-asset support).
+Because bundlers rename the files they emit, do this on your bundler's
+*output*, not on this package's `dist/`. With webpack's
+`compression-webpack-plugin`:
+
+```js
+import zlib from "node:zlib";
+import CompressionPlugin from "compression-webpack-plugin";
+
+new CompressionPlugin({
+  test: /\.wasm$/,
+  filename: "[path][base].br",
+  algorithm: "brotliCompress",
+  compressionOptions: {
+    params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 },
+  },
+});
+```
+
+If your stack can only serve gzip, precompressing with
+[zopfli](https://github.com/google/zopfli) still produces standard gzip that
+every client decodes, about 9% smaller than gzip -9.
+
+Separately, grammars are generated with derived parse tables (see
+`patches/tree-sitter/0002`): the generator omits the state → row offset map
+and stores primary state ids as deltas, and the grammar rebuilds both on its
+first `tree_sitter_<lang>()` call. That shrinks compressed grammars by a
+further ~9% (gzip) / ~11% (brotli) with byte-identical tables in memory, so
+parse speed is unchanged; the rebuild is a one-time cost at `loadGrammar`
+(~1 ms for the largest grammar).
+
 ## Architecture
 
 ```

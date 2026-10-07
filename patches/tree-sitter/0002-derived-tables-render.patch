@@ -1,0 +1,208 @@
+From 1750708fe2cfe8a43ad7889e1d7906b36fdcef0c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 22:20:19 +0000
+Subject: [PATCH] Add TREE_SITTER_DERIVED_TABLES env var to render.rs
+
+Derive ts_small_parse_table_map and ts_primary_state_ids at language
+load instead of storing them in the generated parser.
+
+The small parse table lays its rows out back to back in state order, so
+the map is the running sum of row lengths. Stored, it is a strictly
+increasing u32 sequence that LZ compressors barely shrink (~2:1); it was
+~14% of a grammar's brotli-compressed table bytes. Primary state ids are
+stored as (state - primary), which is never negative and often zero,
+instead of as an increasing sequence.
+
+ts_derive_tables() rebuilds both into zero-initialized arrays the first
+time the language function runs. The TSLanguage it returns points at
+arrays with exactly the same contents as before, so the runtime, its
+lookup code and parse performance are unchanged.
+---
+ crates/generate/src/render.rs | 137 ++++++++++++++++++++++++++++++----
+ 1 file changed, 121 insertions(+), 16 deletions(-)
+
+diff --git a/crates/generate/src/render.rs b/crates/generate/src/render.rs
+index 1b2ad95..5a35a3b 100644
+--- a/crates/generate/src/render.rs
++++ b/crates/generate/src/render.rs
+@@ -676,21 +676,102 @@ impl Generator {
+     /// identically with respect to query analysis. We derive this by keeping track of the `core_id`
+     /// for each state and treating the first state with a given `core_id` as primary.
+     fn add_primary_state_id_list(&mut self) {
+-        add_line!(
+-            self,
+-            "static const TSStateId ts_primary_state_ids[STATE_COUNT] = {{"
+-        );
++        // arborium-rt: with TREE_SITTER_DERIVED_TABLES, store `state - primary`
++        // instead of `primary`. A primary state is the *first* state with a
++        // given core id, so the difference is never negative, and for a third
++        // to a half of states it is zero. The absolute ids are an increasing
++        // sequence that LZ compressors barely touch (~2:1); the differences
++        // compress far better. `ts_derive_tables` rebuilds the absolute ids
++        // into a zero-initialized array on first use, so the runtime sees the
++        // exact same `primary_state_ids` contents as before.
++        let derived = self.derived_tables();
++        if derived {
++            add_line!(
++                self,
++                "static const uint16_t ts_primary_state_id_deltas[STATE_COUNT] = {{"
++            );
++        } else {
++            add_line!(
++                self,
++                "static const TSStateId ts_primary_state_ids[STATE_COUNT] = {{"
++            );
++        }
+         indent!(self);
+         let mut first_state_for_each_core_id = HashMap::new();
+         for (idx, state) in self.parse_table.states.iter().enumerate() {
+-            let primary_state = first_state_for_each_core_id
++            let primary_state = *first_state_for_each_core_id
+                 .entry(state.core_id)
+                 .or_insert(idx);
+-            add_line!(self, "[{idx}] = {primary_state},");
++            if derived {
++                add_line!(self, "[{idx}] = {},", idx - primary_state);
++            } else {
++                add_line!(self, "[{idx}] = {primary_state},");
++            }
+         }
+         dedent!(self);
+         add_line!(self, "}};");
+         add_line!(self, "");
++        if derived {
++            add_line!(self, "static TSStateId ts_primary_state_ids[STATE_COUNT];");
++            add_line!(self, "");
++        }
++    }
++
++    /// arborium-rt: whether to emit derived tables (see `add_derive_tables_fn`).
++    ///
++    /// Enabled by the `TREE_SITTER_DERIVED_TABLES` env var. Only the sizes and
++    /// encodings of tables *in the generated file* change: the `TSLanguage`
++    /// returned by the language function points at arrays with exactly the
++    /// same contents as without the flag, so the runtime is unaffected.
++    fn derived_tables(&self) -> bool {
++        std::env::var_os("TREE_SITTER_DERIVED_TABLES").is_some()
++    }
++
++    /// arborium-rt: emit `ts_derive_tables`, which fills in the tables that
++    /// `TREE_SITTER_DERIVED_TABLES` leaves out of the generated file:
++    ///
++    /// - `ts_small_parse_table_map`: the small parse table lays its rows out
++    ///   back to back in state order, so each state's offset is the running
++    ///   sum of the previous rows' lengths. A row is `[group_count, (value,
++    ///   symbol_count, symbols...) * group_count]`. Stored, the map is a
++    ///   strictly increasing u32 sequence that compresses about 2:1 and
++    ///   costs ~14% of a grammar's compressed table bytes.
++    /// - `ts_primary_state_ids`: rebuilt from the stored deltas.
++    ///
++    /// Both outputs are pure functions of `const` data written into their own
++    /// zero-initialized arrays, so the function is idempotent. The language
++    /// function calls it once, before handing out the `TSLanguage`.
++    fn add_derive_tables_fn(&mut self) {
++        add_line!(self, "static void ts_derive_tables(void) {{");
++        indent!(self);
++        if self.large_state_count < self.parse_table.states.len() {
++            add_line!(self, "uint32_t index = 0;");
++            add_line!(
++                self,
++                "for (uint32_t i = 0; i < STATE_COUNT - LARGE_STATE_COUNT; i++) {{"
++            );
++            indent!(self);
++            add_line!(self, "ts_small_parse_table_map[i] = index;");
++            add_line!(self, "uint16_t group_count = ts_small_parse_table[index++];");
++            add_line!(self, "for (uint16_t g = 0; g < group_count; g++) {{");
++            indent!(self);
++            add_line!(self, "index += 2u + ts_small_parse_table[index + 1];");
++            dedent!(self);
++            add_line!(self, "}}");
++            dedent!(self);
++            add_line!(self, "}}");
++        }
++        add_line!(self, "for (uint32_t i = 0; i < STATE_COUNT; i++) {{");
++        indent!(self);
++        add_line!(
++            self,
++            "ts_primary_state_ids[i] = (TSStateId)(i - ts_primary_state_id_deltas[i]);"
++        );
++        dedent!(self);
++        add_line!(self, "}}");
++        dedent!(self);
++        add_line!(self, "}}");
++        add_line!(self, "");
+     }
+ 
+     fn add_field_sequences(&mut self) {
+@@ -1457,20 +1538,28 @@ impl Generator {
+             add_line!(self, "}};");
+             add_line!(self, "");
+ 
+-            add_line!(
+-                self,
+-                "static const uint32_t ts_small_parse_table_map[] = {{"
+-            );
+-            indent!(self);
+-            for i in self.large_state_count..self.parse_table.states.len() {
++            if self.derived_tables() {
++                // arborium-rt: filled in by `ts_derive_tables`.
+                 add_line!(
+                     self,
+-                    "[SMALL_STATE({i})] = {},",
+-                    small_state_indices[i - self.large_state_count]
++                    "static uint32_t ts_small_parse_table_map[STATE_COUNT - LARGE_STATE_COUNT];"
+                 );
++            } else {
++                add_line!(
++                    self,
++                    "static const uint32_t ts_small_parse_table_map[] = {{"
++                );
++                indent!(self);
++                for i in self.large_state_count..self.parse_table.states.len() {
++                    add_line!(
++                        self,
++                        "[SMALL_STATE({i})] = {},",
++                        small_state_indices[i - self.large_state_count]
++                    );
++                }
++                dedent!(self);
++                add_line!(self, "}};");
+             }
+-            dedent!(self);
+-            add_line!(self, "}};");
+             add_line!(self, "");
+         }
+         if next_parse_action_list_index >= usize::from(u16::MAX) {
+@@ -1543,6 +1632,10 @@ impl Generator {
+         let language_function_name = format!("tree_sitter_{}", self.language_name);
+         let external_scanner_name = format!("{language_function_name}_external_scanner");
+ 
++        if self.derived_tables() {
++            self.add_derive_tables_fn();
++        }
++
+         add_line!(self, "#ifdef __cplusplus");
+         add_line!(self, r#"extern "C" {{"#);
+         add_line!(self, "#endif");
+@@ -1703,6 +1796,18 @@ impl Generator {
+ 
+         dedent!(self);
+         add_line!(self, "}};");
++        if self.derived_tables() {
++            // arborium-rt: `ts_derive_tables` is idempotent (it only writes
++            // values computed from const data), so the flag is just a fast
++            // path for repeat calls, not a correctness requirement.
++            add_line!(self, "static bool tables_derived = false;");
++            add_line!(self, "if (!tables_derived) {{");
++            indent!(self);
++            add_line!(self, "ts_derive_tables();");
++            add_line!(self, "tables_derived = true;");
++            dedent!(self);
++            add_line!(self, "}}");
++        }
+         add_line!(self, "return &language;");
+         dedent!(self);
+         add_line!(self, "}}");
+-- 
+2.43.0
+

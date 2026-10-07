@@ -129,6 +129,14 @@ export function buildGrammar(
 						env: {
 							...runEnv,
 							TREE_SITTER_SPARSE_ONLY: "1",
+							// Leave `ts_small_parse_table_map` out of parser.c and store
+							// primary state ids as deltas; `ts_derive_tables()` rebuilds
+							// both on the first `tree_sitter_<lang>()` call (see
+							// patches/tree-sitter/0002). The map is a strictly increasing
+							// u32 sequence that compresses ~2:1, so dropping it cuts the
+							// compressed grammar wasm by ~9% (gzip) / ~11% (brotli). The
+							// runtime sees byte-identical tables, so parsing is unchanged.
+							TREE_SITTER_DERIVED_TABLES: "1",
 						},
 					},
 				);

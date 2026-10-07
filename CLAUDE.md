@@ -392,6 +392,22 @@ Two pinned submodules live under `third_party/`:
   which is one-shot per file. The arborium-tree-sitter runtime already
   handles `large_state_count == 0` (every lookup goes through the
   sparse path; cf. `crates/arborium-tree-sitter/src/language.h:78`).
+  A second patch (`patches/tree-sitter/0002-derived-tables-render.patch`)
+  adds `TREE_SITTER_DERIVED_TABLES`, which `build wasm grammar` also sets.
+  It leaves `ts_small_parse_table_map` out of `parser.c` (the rows are laid
+  out back to back in state order, so the map is the prefix sum of row
+  lengths) and stores `ts_primary_state_ids` as `state - primary` deltas.
+  A generated `ts_derive_tables()` rebuilds both into zero-initialized
+  arrays on the first `tree_sitter_<lang>()` call. The stored map was a
+  strictly increasing u32 sequence that LZ compressors barely shrink; the
+  change cuts the compressed grammar wasm by ~9% (gzip) / ~11% (brotli)
+  while the `TSLanguage` the runtime sees has byte-identical tables, so
+  parsing is unaffected (verified: identical trees, parse time within
+  noise on 13 grammars). Costs: a one-time derive pass at grammar load
+  (~1 ms for cpp, µs for small grammars) and ~1% more *raw* wasm, because
+  emscripten doesn't assume zeroed memory for SIDE_MODULEs and so stores
+  the empty arrays as zero bytes (which compress to almost nothing). The
+  Node addon build does not set this flag.
   Note that **only the CLI** comes from this submodule: the tree-sitter C
   that actually runs is arborium's vendored copy
   (`crates/arborium-tree-sitter/src/`), compiled into the MAIN_MODULE host
@@ -492,6 +508,19 @@ means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
   the dense layout, point `build wasm grammar` at an unpatched binary and
   unset the env var; the wasm will be 2–4× larger but the parse tree
   will be byte-identical.
+- **Derived tables.** `build wasm grammar` also sets
+  `TREE_SITTER_DERIVED_TABLES=1` (patch 0002), so `parser.c` contains
+  `ts_primary_state_id_deltas` and a `ts_derive_tables()` function instead
+  of a stored `ts_small_parse_table_map`. Anything that reads those arrays
+  must go through the `TSLanguage` returned by `tree_sitter_<lang>()`,
+  never the static symbols directly, since they're only filled in by that
+  call. Don't try to "optimize" the small parse table's *values* for
+  compression (delta-coding action ids or goto states): measured, it makes
+  brotli output 40–100% larger, because LZ relies on exact repeats of
+  (value, symbol list) pairs across states.
+- **Serving.** Precompress grammar wasm with brotli -11 at build time
+  (−31% vs gzip -6 across the corpus); see the package README's "Serving
+  compressed" section.
 
 ## Conventions worth knowing
 
