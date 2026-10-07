@@ -87,7 +87,7 @@ export function buildAll(args: BuildAllArgs = {}) {
 					})),
 					{
 						concurrent: availableParallelism(),
-						collectErrors: "minimal",
+						collectErrors: true,
 						exitOnError: false,
 					},
 				);

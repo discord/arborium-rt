@@ -11,18 +11,18 @@
 		"test": "vitest run"
 	},
 	"dependencies": {
-		"@napi-rs/cli": "^3",
-		"listr2": "^10.2.2",
+		"@napi-rs/cli": "^3.10.8",
+		"listr2": "^11.1.1",
 		"ora": "^9.4.1",
 		"sade": "^1.8.1",
 		"spdx-satisfies": "^6.0.0",
-		"yaml": "^2.8.3"
+		"yaml": "^2.9.1"
 	},
 	"devDependencies": {
-		"@types/node": "^25.6.0",
+		"@types/node": "^26.6.4",
 		"@types/spdx-satisfies": "^6.0.0",
-		"typescript": "^6.0.3",
-		"vitest": "^4.1.11"
+		"typescript": "^7.0.2",
+		"vitest": "^5.0.3"
 	},
 	"engines": {
 		"node": ">=22"
