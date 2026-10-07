@@ -142,13 +142,16 @@ export function buildGrammar(
 				await copySupportFiles(ctx.grammarDir, join(ctx.buildDir, "src"));
 
 				// Build the packer against this grammar's parser.c and run it under
-				// Node. It encodes every table in the generated TSLanguage into one
-				// compact blob, decodes it again and checks the result matches the
-				// original byte for byte, then writes src/parser_packed.c: parser.c
-				// with tree_sitter_<lang>() replaced by one that expands the blob
-				// through the host's ts_packed_language_load(). The original tables
-				// end up unreferenced, so the linker drops them. External scanner
-				// functions are never called while packing, so they stay undefined.
+				// Node. It encodes every table in the generated TSLanguage and both
+				// lex functions (as the word programs tree-sitter patch 0003 emits)
+				// into one compact blob, decodes it again and checks the tables
+				// match the original byte for byte and the lex programs behave like
+				// the compiled lex functions, then writes src/parser_packed.c: the
+				// blob plus a tree_sitter_<lang>() that expands it through the
+				// host's ts_packed_language_load() and lex stubs that call
+				// ts_packed_lex(). It doesn't include parser.c, so the compile below
+				// is tiny. External scanner functions are never called while
+				// packing, so they stay undefined.
 				await run(
 					task.stdout(),
 					"emcc",
@@ -175,9 +178,17 @@ export function buildGrammar(
 					],
 					{ cwd: ctx.buildDir },
 				);
-				await run(task.stdout(), "node", ["pack.cjs", "src/parser_packed.c"], {
-					cwd: ctx.buildDir,
-				});
+				// --liftoff-only: the lex equivalence check calls the compiled
+				// ts_lex enough to tier it up, and TurboFan exhausts its zone
+				// memory optimizing the largest lex functions (vim's is ~32k
+				// lines). The baseline compiler finishes the whole check in well
+				// under a second.
+				await run(
+					task.stdout(),
+					"node",
+					["--liftoff-only", "pack.cjs", "src/parser_packed.c"],
+					{ cwd: ctx.buildDir },
+				);
 			},
 		},
 		{

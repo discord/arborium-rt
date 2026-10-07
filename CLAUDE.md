@@ -319,10 +319,11 @@ the consumer's responsibility.
 ### Packed language tables (`lib/packed/`)
 
 A generated `parser.c` is ~90% static tables, and in the wasm build those
-tables were ~95% of every grammar SIDE_MODULE (cpp: 2.2 MB of 2.35 MB).
-`lib/packed/` replaces them with a compact blob that the host expands into
-an ordinary `TSLanguage` the first time a grammar's `tree_sitter_<lang>()`
-is called:
+tables were ~95% of every grammar SIDE_MODULE (cpp: 2.2 MB of 2.35 MB); the
+compiled lexers were most of the rest. `lib/packed/` replaces both with a
+compact blob that the host expands into an ordinary `TSLanguage` the first
+time a grammar's `tree_sitter_<lang>()` is called, leaving only the
+external scanner (if any) as grammar code:
 
 - **`ts_packed.c`** — the codec: an adaptive binary range coder plus one
   model per table, written once and run in both directions (encoding reads
@@ -338,16 +339,26 @@ is called:
   `small_parse_table_map`, `primary_state_ids`, lex modes (a function of the
   valid-token set) and every `reusable` flag (a token-overlap relation plus
   per-state exceptions) are re-derived exactly as `render.rs` derives them.
+  The lex functions travel as the word programs from tree-sitter patch
+  `0003`, coded structurally, and `ts_packed_lex` replays them with the
+  same control flow as the `START_LEXER`/`ADVANCE`/`SKIP`/`ADVANCE_MAP`
+  macros (including render.rs's exact per-range conditions, which differ
+  from plain range membership around `'\0'`, eof and negative lookaheads).
   Compiled without `TS_PACKED_ENCODER` into the MAIN_MODULE host, which
-  exports `ts_packed_language_load`.
+  exports `ts_packed_language_load` and `ts_packed_lex`.
 - **`pack.c`** — the build-time packer. `build wasm grammar` compiles it with
-  the grammar's `parser.c` and `ts_packed.c` (with `TS_PACKED_ENCODER`) for
-  Node, runs it, and it encodes the tables, **decodes them again and fails
-  the build unless every table matches the original byte for byte**, then
-  writes `src/parser_packed.c`: `parser.c` with `tree_sitter_<lang>()`
-  renamed and replaced by one that loads the blob. Linking that file leaves
-  the original tables unreferenced, so the linker drops them; the lex
-  functions and external scanner stay compiled code.
+  the grammar's `parser.c` (with `TREE_SITTER_LEX_PROGRAM`) and
+  `ts_packed.c` (with `TS_PACKED_ENCODER`) for Node, runs it, and it encodes
+  the tables and lexers, **decodes them again and fails the build unless
+  every table matches the original byte for byte and each lex program
+  behaves exactly like the compiled lex function** (both are run from every
+  state on every character the program tests, its neighbours, and
+  pseudo-random strings of them, comparing every advance/skip/mark_end and
+  the result against a mock `TSLexer`). It then writes `src/parser_packed.c`,
+  which holds the blob, `ts_lex`/`ts_lex_keywords` stubs that call
+  `ts_packed_lex`, and a `tree_sitter_<lang>()` that loads the blob. It
+  doesn't include `parser.c`, so the grammar's final compile is just that
+  file plus the scanner.
 
 The format is internal to a given host build — grammars and the host
 always ship together in one package, so there's no versioning beyond the
@@ -438,7 +449,10 @@ Two pinned submodules live under `third_party/`:
   descending-size order, which only mattered for picking dense states.
   State numbers are arbitrary to the runtime; the canonical order lets the
   packed table format (see "Packed language tables") imply most shift and
-  goto targets.
+  goto targets. A third (`0003`) has `render.rs` also emit each lex
+  function as a word program (exactly the checks it renders as C) plus the
+  large character sets, inside `#ifdef TREE_SITTER_LEX_PROGRAM`, so a
+  normal build of `parser.c` is unchanged.
   Note that **only the CLI** comes from this submodule: the tree-sitter C
   that actually runs is arborium's vendored copy
   (`crates/arborium-tree-sitter/src/`), compiled into the MAIN_MODULE host

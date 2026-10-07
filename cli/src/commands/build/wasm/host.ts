@@ -40,8 +40,10 @@ const EXTRA_TS_EXPORTS = [
 	"_ts_node_start_byte",
 	"_ts_node_end_byte",
 	// Expands a grammar SIDE_MODULE's packed tables (lib/packed/) into a
-	// TSLanguage. Every grammar built by `build wasm grammar` imports it.
+	// TSLanguage, and runs its packed lex programs. Every grammar built by
+	// `build wasm grammar` imports both.
 	"_ts_packed_language_load",
+	"_ts_packed_lex",
 ];
 
 /**
