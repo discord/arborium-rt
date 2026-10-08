@@ -129,6 +129,13 @@ export function buildGrammar(
 						env: {
 							...runEnv,
 							TREE_SITTER_SPARSE_ONLY: "1",
+							// Number parse states and action lists in a compression-friendly
+							// order and leave out data that `ts_derive_tables()` rebuilds on
+							// the first `tree_sitter_<lang>()` call (see
+							// patches/tree-sitter/0002). ~30% smaller at brotli -11, ~25% at
+							// gzip -6; the tables the runtime sees are isomorphic to stock
+							// output, so parsing results and speed are unchanged.
+							TREE_SITTER_DERIVED_TABLES: "1",
 						},
 					},
 				);
