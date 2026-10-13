@@ -157,7 +157,6 @@ export function buildWasmHost() {
 						"-O2",
 						"--minify",
 						"0",
-						"-gsource-map=inline",
 						"-fno-exceptions",
 						"-std=c11",
 						"-s",
