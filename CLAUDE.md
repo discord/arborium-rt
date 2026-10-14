@@ -392,6 +392,35 @@ Two pinned submodules live under `third_party/`:
   which is one-shot per file. The arborium-tree-sitter runtime already
   handles `large_state_count == 0` (every lookup goes through the
   sparse path; cf. `crates/arborium-tree-sitter/src/language.h:78`).
+  A second patch (`patches/tree-sitter/0002-derived-tables-render.patch`)
+  adds `TREE_SITTER_DERIVED_TABLES`, which `build wasm grammar` also sets.
+  It makes the generated tables compress better while keeping the work to
+  restore them at load to one linear pass:
+  - parse states are renumbered so each LR(0) core's states are adjacent,
+    with cores chained greedily by similarity (0 and 1 keep their ids);
+  - action list ids are assigned in the order the small parse table emits
+    them, and each list's first occurrence is emitted as `0`;
+  - `ts_small_parse_table_map` is omitted (it's the prefix sum of row
+    lengths) and `ts_primary_state_ids` is stored as `state - primary`.
+  A generated `ts_derive_tables()` restores all of it on the first
+  `tree_sitter_<lang>()` call. Measured on 13 grammars (json..cpp) at
+  brotli -11: −30.6% total (cpp −36.7%, rust −33.3%; json +90 bytes);
+  gzip -6 −25.3%. Raw size is ~1% *larger*, because emscripten doesn't
+  assume zeroed memory for SIDE_MODULEs and stores the derived arrays as
+  zero bytes (which compress to nothing). The derive pass costs 0.002 ms
+  (json), 0.17 ms (python), ~1.1 ms (cpp) cold in V8; lean, the largest
+  grammar, should be ~4 ms but hasn't been measured (it OOMs `generate` in
+  a 3 GB sandbox).
+  The tables are **isomorphic, not byte-identical**, to stock output:
+  under a state permutation every lookup, action, lex mode and core class
+  matches. Verified on all 13 grammars by a table-level isomorphism check,
+  identical parse trees on real files and on 5,200 corrupted snippets
+  (~95% hit error recovery), including incremental reparses, and parse
+  time within noise. The Node addon build does not set this flag.
+  This is a middle ground to the packed-table codec proposed in PR #12 (−58.6% at
+  brotli -11, but 23–213 ms of decoding at load): PR #12's table
+  re-rendering step alone costs ~90 ms for cpp, so anything that rebuilds
+  grouped rows from a semantic model can't fit a few-ms budget.
   Note that **only the CLI** comes from this submodule: the tree-sitter C
   that actually runs is arborium's vendored copy
   (`crates/arborium-tree-sitter/src/`), compiled into the MAIN_MODULE host
@@ -492,6 +521,29 @@ means the `.cargo/config.toml` `EXPORTED_FUNCTIONS` list is out of sync.
   the dense layout, point `build wasm grammar` at an unpatched binary and
   unset the env var; the wasm will be 2–4× larger but the parse tree
   will be byte-identical.
+- **Derived tables.** `build wasm grammar` also sets
+  `TREE_SITTER_DERIVED_TABLES=1` (patch 0002). Consequences:
+  - State ids and action list ids in a grammar's `parser.c` differ from a
+    stock `tree-sitter generate` of the same grammar. Don't compare them
+    across the two, or against upstream grammar repos' committed parsers.
+  - Anything reading the tables must go through the `TSLanguage` returned
+    by `tree_sitter_<lang>()`, never the static arrays: the map and primary
+    ids are only filled in by that call, and `ts_small_parse_table`
+    contains `0` placeholders until then.
+  - `ts_derive_tables()` writes the small parse table in place, so the
+    first call must not race another first call. Fine for the wasm host
+    (single threaded); keep it that way if this flag ever reaches the
+    Node addon.
+  - Things that measured as *worse* under brotli, so don't "optimize" into
+    them: delta-coding action ids or goto states (+40–100%), PR #12's
+    breadth-first state order without its model (+11%), deduplicating
+    symbol lists (−5% only), splitting the table into streams (no gain).
+    LZ relies on exact repeats of (value, symbol list) pairs; what helps
+    is putting similar rows near each other and not storing first
+    occurrences.
+- **Serving.** Precompress grammar wasm with brotli -11 at build time
+  (−31% vs gzip -6 across the corpus); see the package README's "Serving
+  compressed" section.
 
 ## Conventions worth knowing
 
