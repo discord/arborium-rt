@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Chen <chris.chen@discordapp.com>
+Date: Thu, 29 Oct 2026 13:38:53 -0700
+Subject: [PATCH] plugin-runtime: bound parse work per set_text
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Query fuel meters only the query cursor, so the tree-sitter parse that
+set_text runs before any query had no upper bound. Some grammars do
+superlinear parse work on some inputs, and since parsing is synchronous a
+single set_text can stall its caller for as long as the parse takes.
+
+Pass a progress callback to parse_with_options that allows
+PARSE_OPERATIONS_PER_BYTE (10) parser operations per byte of input, with
+a floor of MIN_PARSE_OPERATIONS (10,000). tree-sitter calls it every 100
+operations, so the parse stops within one check of the budget. An
+abandoned parse leaves the session with no tree, which parse_raw already
+reports as an error and highlight.rs already skips for injected blocks.
+The parser is reset afterward so the next set_text starts fresh instead
+of resuming the abandoned parse.
+
+The budget scales with length so large ordinary documents stay whole.
+Measured on real source, parsing costs ~0.5-1.3 operations per byte
+(Kotlin, TypeScript, TSX and Markdown files from 3 to 754 KB) and ~7 for dense
+method chains, so ordinary input stays well inside it, while a
+superlinear parse passes 10 per byte quickly and is cut off.
+---
+diff --git a/crates/arborium-plugin-runtime/src/lib.rs b/crates/arborium-plugin-runtime/src/lib.rs
+index 0d1f176..b67283f 100644
+--- a/crates/arborium-plugin-runtime/src/lib.rs
++++ b/crates/arborium-plugin-runtime/src/lib.rs
+@@ -53,8 +53,8 @@ use core::ops::ControlFlow;
+ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+ 
+ use arborium_tree_sitter::{
+-    InputEdit, Language, Parser, Point, Query, QueryCursor, QueryCursorOptions, QueryCursorState,
+-    QueryError, StreamingIterator, Tree,
++    InputEdit, Language, ParseOptions, ParseState, Parser, Point, Query, QueryCursor,
++    QueryCursorOptions, QueryCursorState, QueryError, StreamingIterator, Tree,
+ };
+ use arborium_wire::{
+     Edit, ParseError, Utf8Injection, Utf8ParseResult, Utf8Span, Utf16Injection, Utf16ParseResult,
+@@ -285,6 +285,20 @@ pub const FUEL_PER_LIVE_STATE: u32 = 1;
+ /// the document contains.
+ pub const DEFAULT_QUERY_FUEL: u32 = 80_000_000;
+ 
++/// Parser operations [`PluginRuntime::set_text`] may spend per byte of input
++/// before the parse is abandoned. Query fuel only meters queries, so without
++/// this the parse itself has no upper bound.
++///
++/// Scaling with input length keeps large ordinary documents whole while still
++/// cutting off parses that grow faster than the input. Measured costs: typical
++/// source is ~0.5–1.3 operations per byte and dense method chains ~7, while
++/// superlinear parses pass 10 within a few hundred bytes and keep climbing.
++pub const PARSE_OPERATIONS_PER_BYTE: u64 = 10;
++
++/// Lower bound on the parse budget, so very short inputs aren't held to a
++/// handful of operations.
++pub const MIN_PARSE_OPERATIONS: u64 = 10_000;
++
+ /// What one query execution cost, and whether it finished.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub struct FuelSpent {
+@@ -322,11 +336,33 @@ impl PluginRuntime {
+ 
+     /// Set the full text content for a session.
+     ///
+-    /// This replaces any previous content and resets the parse tree.
++    /// This replaces any previous content and resets the parse tree. A parse
++    /// that exceeds its budget (see [`PARSE_OPERATIONS_PER_BYTE`]) is
++    /// abandoned, leaving the session with no tree.
+     pub fn set_text(&mut self, session_id: u32, text: &str) {
+         if let Some(session) = self.sessions.get_mut(&session_id) {
+             session.text = String::from(text);
+-            session.tree = session.parser.parse(text, None);
++            let budget = (text.len() as u64)
++                .saturating_mul(PARSE_OPERATIONS_PER_BYTE)
++                .max(MIN_PARSE_OPERATIONS);
++            // tree-sitter calls the progress callback every 100 operations.
++            let mut checks_left = budget / 100;
++            let mut on_progress = |_: &ParseState| {
++                if checks_left == 0 {
++                    return ControlFlow::Break(());
++                }
++                checks_left -= 1;
++                ControlFlow::Continue(())
++            };
++            session.tree = session.parser.parse_with_options(
++                &mut |i, _| text.as_bytes().get(i..).unwrap_or_default(),
++                None,
++                Some(ParseOptions::new().progress_callback(&mut on_progress)),
++            );
++            if session.tree.is_none() {
++                // Otherwise tree-sitter resumes the abandoned parse on the next call.
++                session.parser.reset();
++            }
+             session.cancelled.store(false, Ordering::Relaxed);
+         }
+     }
+-- 
+2.0
+
