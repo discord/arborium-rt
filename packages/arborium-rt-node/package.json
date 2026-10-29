@@ -1,6 +1,6 @@
 {
 	"name": "@discord/arborium-rt-node",
-	"version": "0.1.3",
+	"version": "0.1.4",
 	"description": "Statically-linked tree-sitter + arborium runtime for Node.js",
 	"license": "MIT",
 	"type": "module",
