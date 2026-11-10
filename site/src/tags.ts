@@ -1,68 +1,122 @@
 // Theme slots the runtime can emit, mirroring `ThemeSlot::tag` and
 // `tag_to_name` in third_party/arborium/crates/arborium-theme/src/highlights.rs.
 // arborium-rt ships no theme CSS, so the playground supplies its own: each
-// entry styles both the custom-element form (`<a-k>`) and the class-name
-// form (`<span class="keyword">`) of the same slot.
+// slot maps to Tailwind classes (a light and a `dark:` colour from the default
+// palette) that the page adds to every token element it renders, whether it
+// is the custom-element form (`<a-k>`) or the class-name form
+// (`<span class="keyword">`). Keep these as complete literal class strings so
+// Tailwind's source scan picks them up.
 
 interface TagStyle {
 	readonly tag: string;
 	readonly name: string;
-	readonly css: string;
+	readonly className: string;
 }
 
 export const TAGS: readonly TagStyle[] = [
-	{ tag: "k", name: "keyword", css: "color: #bb9af7" },
-	{ tag: "f", name: "function", css: "color: #7aa2f7" },
-	{ tag: "s", name: "string", css: "color: #9ece6a" },
-	{ tag: "c", name: "comment", css: "color: #6b7280; font-style: italic" },
-	{ tag: "t", name: "type", css: "color: #2ac3de" },
-	{ tag: "v", name: "variable", css: "color: #c0caf5" },
-	{ tag: "co", name: "constant", css: "color: #ff9e64" },
-	{ tag: "n", name: "number", css: "color: #ff9e64" },
-	{ tag: "o", name: "operator", css: "color: #89ddff" },
-	{ tag: "p", name: "punctuation", css: "color: #9aa5ce" },
-	{ tag: "pr", name: "property", css: "color: #73daca" },
-	{ tag: "at", name: "attribute", css: "color: #e0af68" },
-	{ tag: "tg", name: "tag", css: "color: #f7768e" },
-	{ tag: "m", name: "macro", css: "color: #7dcfff" },
-	{ tag: "l", name: "label", css: "color: #e0af68" },
-	{ tag: "ns", name: "namespace", css: "color: #2ac3de" },
-	{ tag: "cr", name: "constructor", css: "color: #e0af68" },
-	{ tag: "tt", name: "title", css: "color: #7aa2f7; font-weight: bold" },
-	{ tag: "st", name: "strong", css: "font-weight: bold" },
-	{ tag: "em", name: "emphasis", css: "font-style: italic" },
+	{
+		tag: "k",
+		name: "keyword",
+		className: "text-violet-700 dark:text-violet-300",
+	},
+	{ tag: "f", name: "function", className: "text-blue-700 dark:text-blue-300" },
+	{ tag: "s", name: "string", className: "text-green-700 dark:text-green-300" },
+	{ tag: "c", name: "comment", className: "text-zinc-500 italic" },
+	{ tag: "t", name: "type", className: "text-cyan-700 dark:text-cyan-300" },
+	{
+		tag: "v",
+		name: "variable",
+		className: "text-zinc-900 dark:text-indigo-100",
+	},
+	{
+		tag: "co",
+		name: "constant",
+		className: "text-orange-700 dark:text-orange-300",
+	},
+	{
+		tag: "n",
+		name: "number",
+		className: "text-orange-700 dark:text-orange-300",
+	},
+	{ tag: "o", name: "operator", className: "text-sky-700 dark:text-sky-300" },
+	{
+		tag: "p",
+		name: "punctuation",
+		className: "text-slate-500 dark:text-slate-400",
+	},
+	{
+		tag: "pr",
+		name: "property",
+		className: "text-teal-700 dark:text-teal-300",
+	},
+	{
+		tag: "at",
+		name: "attribute",
+		className: "text-amber-700 dark:text-amber-300",
+	},
+	{ tag: "tg", name: "tag", className: "text-rose-700 dark:text-rose-300" },
+	{ tag: "m", name: "macro", className: "text-sky-700 dark:text-sky-300" },
+	{ tag: "l", name: "label", className: "text-amber-700 dark:text-amber-300" },
+	{
+		tag: "ns",
+		name: "namespace",
+		className: "text-cyan-700 dark:text-cyan-300",
+	},
+	{
+		tag: "cr",
+		name: "constructor",
+		className: "text-amber-700 dark:text-amber-300",
+	},
+	{
+		tag: "tt",
+		name: "title",
+		className: "font-bold text-blue-700 dark:text-blue-300",
+	},
+	{ tag: "st", name: "strong", className: "font-bold" },
+	{ tag: "em", name: "emphasis", className: "italic" },
 	{
 		tag: "tu",
 		name: "link",
-		css: "color: #73daca; text-decoration: underline",
+		className: "text-teal-700 underline dark:text-teal-300",
 	},
-	{ tag: "tl", name: "literal", css: "color: #9ece6a" },
-	{ tag: "tx", name: "strikethrough", css: "text-decoration: line-through" },
-	{ tag: "da", name: "diff-add", css: "color: #9ece6a; background: #9ece6a1a" },
+	{
+		tag: "tl",
+		name: "literal",
+		className: "text-green-700 dark:text-green-300",
+	},
+	{ tag: "tx", name: "strikethrough", className: "line-through" },
+	{
+		tag: "da",
+		name: "diff-add",
+		className: "bg-green-500/10 text-green-700 dark:text-green-300",
+	},
 	{
 		tag: "dd",
 		name: "diff-delete",
-		css: "color: #f7768e; background: #f7768e1a",
+		className: "bg-rose-500/10 text-rose-700 dark:text-rose-300",
 	},
-	{ tag: "eb", name: "embedded", css: "color: #c0caf5" },
+	{
+		tag: "eb",
+		name: "embedded",
+		className: "text-zinc-900 dark:text-indigo-100",
+	},
 	{
 		tag: "er",
 		name: "error",
-		css: "text-decoration: wavy underline #f7768e",
+		className: "underline decoration-rose-500 decoration-wavy",
 	},
 ];
 
-const NAME_BY_TAG = new Map(TAGS.map((t) => [t.tag, t.name]));
+/** Added to every rendered token so hovering shows what the runtime emitted. */
+export const TOKEN_CLASS =
+	"rounded-xs hover:outline hover:outline-zinc-400 dark:hover:outline-zinc-600";
+
+const BY_TAG = new Map(TAGS.map((t) => [t.tag, t]));
 const TAG_BY_NAME = new Map(TAGS.map((t) => [t.name, t.tag]));
 
 export const tagName = (tag: string): string | undefined =>
-	NAME_BY_TAG.get(tag);
+	BY_TAG.get(tag)?.name;
+export const tagClass = (tag: string): string =>
+	BY_TAG.get(tag)?.className ?? "";
 export const tagForName = (name: string): string | undefined =>
 	TAG_BY_NAME.get(name);
-
-export function themeCss(): string {
-	return TAGS.map(
-		(t) =>
-			`.code a-${t.tag}, .code .${t.name}, .legend a-${t.tag} { ${t.css} }`,
-	).join("\n");
-}

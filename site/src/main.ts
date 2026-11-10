@@ -8,7 +8,7 @@ import {
 	type ThemedSpan,
 } from "@discord/arborium-rt-wasm";
 import { SAMPLES } from "./samples.ts";
-import { TAGS, tagForName, tagName, themeCss } from "./tags.ts";
+import { TAGS, TOKEN_CLASS, tagClass, tagForName, tagName } from "./tags.ts";
 
 // ── DOM ──────────────────────────────────────────────────────────────────
 
@@ -28,13 +28,9 @@ const resultEl = $<HTMLPreElement>("result");
 const statsEl = $<HTMLDListElement>("stats");
 const rawEl = $<HTMLPreElement>("raw");
 
-const style = document.createElement("style");
-style.textContent = themeCss();
-document.head.append(style);
-
 $<HTMLDivElement>("legend").innerHTML = TAGS.map(
 	(t) =>
-		`<div><span class="tag">${t.tag}</span> <a-${t.tag}>${t.name}</a-${t.tag}></div>`,
+		`<div><span class="inline-block min-w-8 text-zinc-500 dark:text-zinc-400">${t.tag}</span><a-${t.tag} class="${t.className}">${t.name}</a-${t.tag}></div>`,
 ).join("");
 
 // ── Grammar resolution ──────────────────────────────────────────────────
@@ -272,7 +268,7 @@ function renderSpans(text: string, spans: readonly ThemedSpan[]): string {
 		const span = spans[owner[runStart] ?? -1];
 		if (span && /^[a-z]+$/.test(span.tag)) {
 			const title = `${tagName(span.tag) ?? "?"} (${span.tag}) · ${span.start}–${span.end}`;
-			html += `<a-${span.tag} data-tag title="${title}">${chunk}</a-${span.tag}>`;
+			html += `<a-${span.tag} class="${TOKEN_CLASS} ${tagClass(span.tag)}" title="${title}">${chunk}</a-${span.tag}>`;
 		} else {
 			html += chunk;
 		}
@@ -281,7 +277,10 @@ function renderSpans(text: string, spans: readonly ThemedSpan[]): string {
 	return html;
 }
 
-/** Add hover titles to runtime-rendered HTML so either format shows tags. */
+/**
+ * Theme runtime-rendered HTML and add hover titles, so either format looks and
+ * behaves like the spans view.
+ */
 function annotateHtml(root: HTMLElement): void {
 	for (const el of root.querySelectorAll<HTMLElement>("*")) {
 		const element = el.tagName.toLowerCase();
@@ -289,7 +288,7 @@ function annotateHtml(root: HTMLElement): void {
 			? element.slice(2)
 			: tagForName(el.className);
 		if (!tag) continue;
-		el.dataset.tag = "";
+		el.className = `${el.className} ${TOKEN_CLASS} ${tagClass(tag)}`;
 		el.title = `${tagName(tag) ?? "?"} (${tag})`;
 	}
 }
@@ -332,7 +331,7 @@ function render(text: string, out: Outcome): void {
 	statsEl.innerHTML = stats
 		.map(
 			([k, v, bad]) =>
-				`<div><dt>${k}</dt><dd${bad ? ' class="bad"' : ""}>${escapeHtml(v)}</dd></div>`,
+				`<div class="flex gap-1.5"><dt class="text-zinc-500 dark:text-zinc-400">${k}</dt><dd${bad ? ' class="text-red-600 dark:text-red-400"' : ""}>${escapeHtml(v)}</dd></div>`,
 		)
 		.join("");
 	setStatus(`Ready · ${GRAMMAR_IDS.length} grammars bundled`);
@@ -340,7 +339,7 @@ function render(text: string, out: Outcome): void {
 
 function setStatus(text: string, error = false): void {
 	statusEl.textContent = text;
-	statusEl.classList.toggle("error", error);
+	statusEl.toggleAttribute("data-error", error);
 }
 
 // ── Persistence (URL hash, then localStorage) ───────────────────────────
