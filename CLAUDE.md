@@ -316,6 +316,18 @@ short slot strings like `"k"`, `"f"`, `"s"` that consumers map to colors
 themselves. arborium-rt does **not** bundle any theme CSS; styling is
 the consumer's responsibility.
 
+### Playground site (`site/`)
+
+Private Vite app (`@discord/arborium-rt-site`, never published) for checking
+highlighting by eye in a browser. It imports the workspace
+`@discord/arborium-rt-wasm`, so that package's `dist/` (host, runtime,
+grammars, `grammars.js`) has to be built first. It loads injected grammars on
+demand, and an `ALIASES` table in `site/src/main.ts` maps fence names like
+`js` to bundled ids. The tag colors in `site/src/tags.ts` are the
+playground's own theme. `pnpm --filter @discord/arborium-rt-site dev` serves
+it. The production script is named `bundle`, not `build`, so CI's
+`pnpm -r build` skips it.
+
 ### Dev CLI (`cli/`)
 
 Private, unpublished workspace package. Run directly from source via tsx

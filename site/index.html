@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>arborium-rt playground</title>
+		<link rel="icon" href="data:," />
+		<link rel="stylesheet" href="/src/style.css" />
+	</head>
+	<body>
+		<header>
+			<h1>arborium-rt playground</h1>
+			<span id="status" class="status">Loading runtime…</span>
+		</header>
+
+		<form id="controls" class="controls">
+			<label>
+				Language
+				<select id="language" disabled></select>
+			</label>
+			<button type="button" id="sample">Load sample</button>
+			<label>
+				Output
+				<select id="output">
+					<option value="spans">Spans (rendered here)</option>
+					<option value="custom-elements">HTML: custom elements</option>
+					<option value="class-names">HTML: class names</option>
+				</select>
+			</label>
+			<label>
+				Injection depth
+				<input id="depth" type="number" min="0" max="32" value="3" />
+			</label>
+			<label class="check">
+				<input id="autoload" type="checkbox" checked />
+				Load injected grammars
+			</label>
+			<button type="button" id="share">Copy link</button>
+		</form>
+
+		<main>
+			<section class="pane">
+				<h2>Source</h2>
+				<textarea
+					id="source"
+					spellcheck="false"
+					autocapitalize="off"
+					autocomplete="off"
+				></textarea>
+			</section>
+			<section class="pane">
+				<h2>Highlighted <span class="hint">(hover a token to see its tag)</span></h2>
+				<pre id="result" class="code"></pre>
+			</section>
+		</main>
+
+		<dl id="stats" class="stats"></dl>
+
+		<details>
+			<summary>Tag legend</summary>
+			<div id="legend" class="legend"></div>
+		</details>
+		<details>
+			<summary>Raw output</summary>
+			<pre id="raw" class="raw"></pre>
+		</details>
+
+		<script type="module" src="/src/main.ts"></script>
+	</body>
+</html>
