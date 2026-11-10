@@ -1,0 +1,45 @@
+name: Playground preview cleanup
+
+# Deletes the PR's `pr-<n>` preview of the playground Worker once the PR is
+# closed or merged. Previews are created by build.yml's `deploy-site` job.
+# See site/wrangler.jsonc.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  delete-preview:
+    # Same gate as deploy-site: fork PRs never get a preview.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: site/wrangler.jsonc
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # Exits 0 without credentials, matching deploy-site. A PR closed before
+      # its first preview deployed has nothing to delete, so a failed delete
+      # is a warning rather than a failure.
+      - name: Delete preview
+        working-directory: site
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice::Cloudflare credentials not set; nothing to clean up."
+            exit 0
+          fi
+          npx --yes wrangler@4.160.0 preview delete \
+            --name "pr-${{ github.event.pull_request.number }}" --skip-confirmation \
+            || echo "::warning::wrangler preview delete failed (maybe no preview was ever created)."

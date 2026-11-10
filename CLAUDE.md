@@ -330,6 +330,12 @@ OS light/dark preference via `dark:` variants. The tag colors in
 class pair per slot, added to every token element the page renders. `pnpm --filter @discord/arborium-rt-site dev` serves
 it. The production script is named `bundle`, not `build`, so CI's
 `pnpm -r build` skips it.
+CI bundles it against the packed wasm tarball (`site` job in `build.yml`) and
+deploys it to the `arborium-rt-playground` Cloudflare Worker
+(`site/wrangler.jsonc`, static assets only): `wrangler deploy` on `main`,
+`wrangler preview --name pr-<n>` for same-repo PRs (never forks), deleted on
+close by `site-cleanup.yml`. Wrangler is pinned in both workflows because
+`wrangler preview` is an open beta.
 
 ### Dev CLI (`cli/`)
 

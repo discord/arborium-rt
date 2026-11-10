@@ -36,3 +36,15 @@ pnpm --filter @discord/arborium-rt-site dev          # http://localhost:5173
 `pnpm --filter @discord/arborium-rt-site bundle` produces a static build in
 `site/dist/` (`preview` serves it). The script is called `bundle` rather than
 `build` so that `pnpm -r build` in CI skips the site.
+
+## Deploying
+
+CI serves the playground from a static-assets-only Cloudflare Worker,
+`arborium-rt-playground` (config in `wrangler.jsonc`). Build's `site` job
+bundles the site against the packed `@discord/arborium-rt-wasm` tarball. Then
+`deploy-site` runs `wrangler deploy` on pushes to `main`, and runs
+`wrangler preview --name pr-<n>` for PRs from branches in this repo, posting
+the URL as a PR comment. Fork PRs get no preview. `site-cleanup.yml` deletes a
+PR's preview when the PR closes. Deploys need the `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` repo secrets; without them, the jobs skip with a
+notice.
