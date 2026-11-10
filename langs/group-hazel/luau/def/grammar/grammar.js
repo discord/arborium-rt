@@ -117,6 +117,30 @@ module.exports = grammar(lua, {
       ),
     ),
 
+    declaration: ($, original) => choice(
+      ...original.members,
+      field(
+        'local_declaration',
+        alias($._const_variable_declaration, $.variable_declaration)
+      ),
+      field(
+        'local_declaration',
+        alias($._const_function_declaration, $.function_declaration)
+      ),
+    ),
+
+    _const_variable_declaration: ($) =>
+      seq(
+        'const',
+        choice(
+          alias($._att_name_list, $.variable_list),
+          alias($._variable_assignment, $.assignment_statement)
+        )
+      ),
+
+    _const_function_declaration: ($) =>
+      seq('const', 'function', field('name', $.identifier), $._function_body),
+
     _function_body: $ => seq(
       optional($.generic_type_list),
       field('parameters', $.parameters),
