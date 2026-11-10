@@ -3,10 +3,10 @@
 //
 // CI deploys it from .github/workflows/build.yml (`deploy-site`): pushes to
 // main run `wrangler deploy`, and same-repo PRs run `wrangler preview --name
-// pr-<n>`. Fork PRs get the same preview from site-preview-fork.yml after a
-// maintainer approves it; that workflow uses the default branch's copy of
-// this file, never the fork's. site-cleanup.yml deletes the preview when the
-// PR closes. Every deploy downloads `dist/` from the Build `site` job's
+// pr-<n>`. Fork PRs get the same preview from site-preview-fork.yml once a
+// maintainer adds the `deploy-preview` label; that workflow uses the default
+// branch's copy of this file, never the fork's. site-cleanup.yml deletes the
+// preview when the PR closes or a fork PR loses the label. Every deploy downloads `dist/` from the Build `site` job's
 // artifact.
 {
 	"name": "arborium-rt-playground",

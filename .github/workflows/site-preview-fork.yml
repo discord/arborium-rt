@@ -1,100 +1,141 @@
 name: Playground preview (fork PRs)
 
-# Deploys a fork PR's playground preview after a maintainer approves it.
+# Deploys a fork PR's playground preview once a maintainer adds the
+# `deploy-preview` label to the PR.
 #
 # A fork's own Build run can't deploy: GitHub gives `pull_request` runs from
-# forks no secrets (environment secrets included) and a read-only token, even
-# once the run is approved. So the fork's Build only bundles the site and
-# uploads `playground-site`, and this workflow picks the artifact up. A
-# `workflow_run` workflow runs in this repo's context with its secrets, and
-# GitHub always takes its definition from the default branch, so a fork can't
-# change it. (It also can't be tested from a PR: it only fires once it's on
-# main.)
+# forks no secrets and a read-only token, even once the run is approved. So
+# the fork's Build only bundles the site and uploads `playground-site`, and
+# this workflow picks the artifact up. `workflow_run` and
+# `pull_request_target` workflows run in this repo's context with its
+# secrets, and GitHub always takes their definition from the default branch,
+# so a fork can't change this file. (It also can't be tested from a PR: it
+# only fires once it's on main.)
 #
-# The deploy job uses the `fork-preview` environment, which must have required
-# reviewers. That is the approval gate: the job waits for a maintainer, who is
-# approving publishing that commit's bundle (which the fork fully controls,
-# HTML and JS included) on its pr-<n> preview hostname. Each Build run is one
-# commit, so every new push to the fork needs a new approval.
+# The label is the approval, and it lasts for the whole PR. Only people with
+# triage access or above can label PRs, so a fork author can't approve their
+# own PR. Adding the label deploys the PR's current head if its Build has
+# finished. After that, every Build that finishes for the PR's head deploys
+# again for as long as the label stays on. Removing the label stops further
+# deploys, and site-cleanup.yml deletes the preview. The bundle is entirely
+# fork-controlled (HTML and JS included), so the label means "I trust this
+# contributor's pushes to this PR", not "I reviewed this commit".
 #
 # Rules for editing this file:
 #   - Never check out, install, or run anything from the fork. The only thing
 #     taken from it is the static `dist/` artifact, which wrangler uploads as
 #     assets. wrangler.jsonc comes from the default branch.
-#   - Treat every workflow_run field the fork controls (head_branch, the run's
-#     display title, artifact contents) as untrusted: pass them through `env`,
-#     never `${{ }}` them into a script.
+#   - Treat every field the fork controls (head_branch, the run's display
+#     title, the PR title and body, artifact contents) as untrusted: pass them
+#     through `env`, never `${{ }}` them into a script.
 #   - Don't take the PR number from the artifact: a fork could name another
 #     PR and overwrite its preview and comment. `resolve` looks it up from the
-#     event's head repo, branch and SHA instead.
+#     event instead.
 #
-# Same-repo PRs and main deploy from build.yml's `deploy-site` without
-# approval. site-cleanup.yml deletes previews when PRs close.
+# Same-repo PRs and main deploy from build.yml's `deploy-site` without a
+# label. site-cleanup.yml deletes previews when PRs close or lose the label.
 
 on:
+  # A fork PR's Build finished: deploy it if the PR has the label.
   workflow_run:
     workflows: [Build]
     types: [completed]
+  # A maintainer labeled a fork PR: deploy its head if that Build has
+  # finished. If it hasn't, the workflow_run trigger deploys it when it does.
+  pull_request_target:
+    types: [labeled]
 
 permissions: {}
 
-# A newer push to the same fork branch supersedes an older run that is still
-# waiting for approval.
-concurrency:
-  group: fork-preview-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
-
 jobs:
-  # No secrets and no approval here: find the open PR this run built, so the
-  # approval request only appears for runs that map to one.
+  # No secrets here: work out which PR, commit and Build run to deploy, if any.
   resolve:
     if: >-
       ${{
-        github.event.workflow_run.event == 'pull_request' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_repository.full_name != github.repository
+        (github.event_name == 'workflow_run' &&
+          github.event.workflow_run.event == 'pull_request' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_repository.full_name != github.repository) ||
+        (github.event_name == 'pull_request_target' &&
+          github.event.label.name == 'deploy-preview' &&
+          github.event.pull_request.state == 'open' &&
+          github.event.pull_request.head.repo.full_name != github.repository)
       }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read # find the Build run for a labeled PR
       pull-requests: read
     outputs:
       pr: ${{ steps.find.outputs.pr }}
+      sha: ${{ steps.find.outputs.sha }}
+      run-id: ${{ steps.find.outputs.run-id }}
     steps:
-      - name: Find the PR for this run
+      - name: Find the PR and Build run
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT: ${{ github.event_name }}
+          # workflow_run
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # pull_request_target
+          LABELED_PR: ${{ github.event.pull_request.number }}
+          LABELED_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELED_REPO_ID: ${{ github.event.pull_request.head.repo.id }}
         run: |
-          # The PR must still point at the commit this run built; if the fork
-          # has pushed since, that push's own run will deploy instead.
-          pr="$(gh api -X GET "repos/$REPO/pulls" \
-            -f state=open -f head="$HEAD_OWNER:$HEAD_BRANCH" \
-            --jq "[.[] | select(.head.sha == \"$HEAD_SHA\")][0].number // empty")"
-          if [ -z "$pr" ]; then
-            echo "::notice::No open PR has head $HEAD_OWNER:$HEAD_BRANCH at $HEAD_SHA; nothing to deploy."
-            exit 0
+          if [ "$EVENT" = workflow_run ]; then
+            # The PR must still point at the commit this run built (if the
+            # fork has pushed since, that push's own run deploys instead) and
+            # must carry the label.
+            pr="$(gh api -X GET "repos/$REPO/pulls" \
+              -f state=open -f head="$RUN_OWNER:$RUN_BRANCH" \
+              --jq "[.[] | select(.head.sha == \"$RUN_SHA\")][0] // empty
+                | select(any(.labels[]; .name == \"deploy-preview\")) | .number")"
+            if [ -z "$pr" ]; then
+              echo "::notice::No open PR with the deploy-preview label has head $RUN_OWNER:$RUN_BRANCH at $RUN_SHA; nothing to deploy."
+              exit 0
+            fi
+            sha="$RUN_SHA"
+            run_id="$RUN_ID"
+          else
+            # The newest successful Build of the PR's head, from the PR's own
+            # head repo.
+            pr="$LABELED_PR"
+            sha="$LABELED_SHA"
+            run_id="$(gh api -X GET "repos/$REPO/actions/workflows/build.yml/runs" \
+              -f event=pull_request -f head_sha="$sha" -f status=success \
+              --jq "[.workflow_runs[] | select(.head_repository.id == $LABELED_REPO_ID)][0].id // empty")"
+            if [ -z "$run_id" ]; then
+              echo "::notice::No successful Build of $sha yet; the preview deploys when one finishes."
+              exit 0
+            fi
           fi
-          echo "pr=$pr" >> "$GITHUB_OUTPUT"
-          echo "Fork PR #$pr at $HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "pr=$pr"
+            echo "sha=$sha"
+            echo "run-id=$run_id"
+          } >> "$GITHUB_OUTPUT"
+          echo "Fork PR #$pr at $sha (Build run $run_id)" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     needs: resolve
     if: ${{ needs.resolve.outputs.pr }}
     runs-on: ubuntu-latest
-    environment:
-      name: fork-preview
-      url: ${{ steps.preview.outputs.url }}
+    # Labeling a PR whose Build is finishing can start two deploys of the same
+    # commit; let the later one win.
+    concurrency:
+      group: fork-preview-pr-${{ needs.resolve.outputs.pr }}
+      cancel-in-progress: true
     permissions:
       actions: read # download the artifact from the Build run
       contents: read
       pull-requests: write
     env:
       PR: ${{ needs.resolve.outputs.pr }}
-      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      HEAD_SHA: ${{ needs.resolve.outputs.sha }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WRANGLER_SEND_METRICS: "false"
@@ -130,7 +171,7 @@ jobs:
         with:
           name: playground-site
           path: site/dist
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ needs.resolve.outputs.run-id }}
           github-token: ${{ github.token }}
 
       - name: Deploy PR preview
@@ -153,4 +194,4 @@ jobs:
           URL: ${{ steps.preview.outputs.url }}
         run: |
           gh pr comment "$PR" --edit-last --create-if-none \
-            --body "**Playground preview:** $URL (built from $HEAD_SHA, approved for deploy)"
+            --body "**Playground preview:** $URL (built from $HEAD_SHA)"

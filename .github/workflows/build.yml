@@ -730,8 +730,8 @@ jobs:
   #     single PR comment that gets edited in place. site-cleanup.yml deletes
   #     it when the PR closes.
   # Fork PRs are skipped here: their runs get no secrets. Their `site`
-  # artifact is deployed by site-preview-fork.yml once a maintainer approves
-  # it through the `fork-preview` environment.
+  # artifact is deployed by site-preview-fork.yml once a maintainer adds the
+  # `deploy-preview` label to the PR.
   #
   # Needs repo secrets CLOUDFLARE_API_TOKEN (Workers Scripts: Edit) and
   # CLOUDFLARE_ACCOUNT_ID. Until both are set, this job logs a notice and

@@ -334,9 +334,10 @@ CI bundles it against the packed wasm tarball (`site` job in `build.yml`) and
 deploys it to the `arborium-rt-playground` Cloudflare Worker
 (`site/wrangler.jsonc`, static assets only): `wrangler deploy` on `main`,
 `wrangler preview --name pr-<n>` for same-repo PRs, deleted on close by
-`site-cleanup.yml` (`pull_request_target`). Fork PRs deploy from
-`site-preview-fork.yml` (`workflow_run`), gated on the `fork-preview`
-environment's required reviewers. It runs with secrets, so it must never check
+`site-cleanup.yml` (`pull_request_target`; also on removing a fork PR's
+label). Fork PRs deploy from `site-preview-fork.yml` (`workflow_run` +
+`pull_request_target: labeled`) while a maintainer's `deploy-preview` label is
+on the PR; the label approves the whole PR, not one commit. It runs with secrets, so it must never check
 out or run fork code: it only uploads the fork's `playground-site` artifact,
 with the default branch's `wrangler.jsonc`, and derives the PR number from the
 event rather than the artifact. Wrangler is pinned in every workflow because
