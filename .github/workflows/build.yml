@@ -367,10 +367,10 @@ jobs:
           # napi names the artifact after the target triple's platformArchABI
           # (x86_64-apple-darwin → darwin-x64), so the sub-package dir is the same.
           - platform: darwin-x64
-            runs-on: macos-14
+            runs-on: macos-26
             target: x86_64-apple-darwin
           - platform: darwin-arm64
-            runs-on: macos-14
+            runs-on: macos-26
           - platform: win32-x64-msvc
             runs-on: windows-latest
           - platform: win32-arm64-msvc
