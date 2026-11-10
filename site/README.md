@@ -44,7 +44,9 @@ CI serves the playground from a static-assets-only Cloudflare Worker,
 bundles the site against the packed `@discord/arborium-rt-wasm` tarball. Then
 `deploy-site` runs `wrangler deploy` on pushes to `main`, and runs
 `wrangler preview --name pr-<n>` for PRs from branches in this repo, posting
-the URL as a PR comment. Fork PRs get no preview. `site-cleanup.yml` deletes a
+the URL as a PR comment. Fork PRs get the same preview from
+`site-preview-fork.yml` once a maintainer approves the deploy (it waits on the
+`fork-preview` environment, under "Review deployments" on the Actions run).
+Each new push to the fork needs a new approval. `site-cleanup.yml` deletes a
 PR's preview when the PR closes. Deploys need the `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` repo secrets; without them, the jobs skip with a
-notice.
+`CLOUDFLARE_ACCOUNT_ID` secrets; without them, the jobs skip with a notice.

@@ -729,8 +729,9 @@ jobs:
   #     separate preview URL per PR (refreshed on every push), linked from a
   #     single PR comment that gets edited in place. site-cleanup.yml deletes
   #     it when the PR closes.
-  # Fork PRs are skipped: they get no secrets, and deploying them would let
-  # anyone publish their own JavaScript on a hostname we own.
+  # Fork PRs are skipped here: their runs get no secrets. Their `site`
+  # artifact is deployed by site-preview-fork.yml once a maintainer approves
+  # it through the `fork-preview` environment.
   #
   # Needs repo secrets CLOUDFLARE_API_TOKEN (Workers Scripts: Edit) and
   # CLOUDFLARE_ACCOUNT_ID. Until both are set, this job logs a notice and
