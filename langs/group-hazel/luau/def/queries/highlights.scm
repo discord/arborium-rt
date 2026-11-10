@@ -79,12 +79,6 @@
     "end"
   ] @keyword.repeat)
 
-(class_statement
-  [
-    "class"
-    "end"
-  ] @keyword)
-
 (function_declaration
   [
     "function"
