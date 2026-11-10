@@ -1,5 +1,6 @@
 packages:
   - cli
+  - site
   - "packages/*"
   # Per-platform napi sub-packages (@discord/arborium-rt-node-<platform>). They
   # carry os/cpu/libc + the prebuilt .node; the @discord/arborium-rt-node main
