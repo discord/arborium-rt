@@ -1,2 +1,1 @@
-; inherits: lua
-(object_type) @fold
+(table_type) @fold
