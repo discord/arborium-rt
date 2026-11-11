@@ -1,3 +1,6 @@
+; What is this for?
+
+
 ((function_call
   name:
     [
@@ -34,7 +37,7 @@
 
 ; ("123"):match("%d+")
 (function_call
-  (method_index_expression
+  (namecall_index_expression
     method: (identifier) @_method
     (#any-of? @_method "find" "format" "match" "gmatch" "gsub"))
   arguments:
