@@ -31,8 +31,9 @@
       .
       (_)
       .
-      (string
-        content: _ @injection.content))
+      (_
+        (string
+          content: _ @injection.content)))
   (#set! injection.language "luap"))
 
 ; ("123"):match("%d+")
@@ -43,8 +44,9 @@
   arguments:
     (arguments
       .
-      (string
-        content: _ @injection.content))
+      (_
+        (string
+          content: _ @injection.content)))
   (#set! injection.language "luap"))
 
 ((comment) @injection.content
