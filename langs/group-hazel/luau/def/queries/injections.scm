@@ -1,6 +1,3 @@
-; What is this for?
-
-
 ((function_call
   name:
     [
