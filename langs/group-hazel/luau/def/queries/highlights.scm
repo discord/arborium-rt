@@ -100,9 +100,7 @@
 
 (stat_classDef
   [
-    "open"
     "class"
-    "extends"
     "end"
   ] @keyword)
 
@@ -156,7 +154,6 @@
   (identifier) @type)
 
 (type_cast_expr "::" @operator)
-
 
 (builtin_type) @type.builtin
 
@@ -267,15 +264,6 @@
   "{"
   "}"
 ] @punctuation.bracket
-
-(variable_list
-  attribute:
-    (attribute
-      ([
-        "<"
-        ">"
-      ] @punctuation.bracket
-        (identifier) @attribute)))
 
 
 (genericTypeList_angle_wrapper
