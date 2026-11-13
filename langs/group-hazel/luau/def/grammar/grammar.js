@@ -55,6 +55,7 @@ const _STR_DOUBLE_QUOTE = '"'
 /**
  * @param {RuleOrLiteral} rule
  * @param {RuleOrLiteral} separator
+ * @param {boolean} trailing_separator Allows (x,y,z,) a separator at the end
  */
 const list_seq = (rule, separator, trailing_separator = false) =>
   trailing_separator
@@ -137,12 +138,13 @@ export default grammar({
      * Basically, the input of everything.
      * chunk ::= block
      */
-    chunk: ($) => $._block,
+    chunk: ($) => optional_block($), // $._block but optional
 
     // block ::= {stat [';']} [laststat [';']]
     _block: ($) =>
       choice(
-        $.last_stat, // cheat
+        //seq($.last_stat, optional(";"))
+        list_seq($.last_stat, ";", true), // cheat
         seq(
           repeat1(seq($.statement, optional(";"))),
           optional(seq($.last_stat, optional(";")))
@@ -326,9 +328,9 @@ export default grammar({
               $.namecall_index_expression
             )
           ),
-          optional(
+          /*optional(
             repeat(field("generic_args", $.genericTypeList_angle_wrapper))
-          ), // uhh...
+          ),*/
           field("arguments",
             $.arguments
           )
@@ -1020,16 +1022,17 @@ export default grammar({
       // PropList ::= TableProp [fieldsep PropList]
       // | TableIndexer {fieldsep TableProp}
       _type_table_prop_list: ($) =>
-        choice(
+        prec.left(choice(
           seq(
             $._type_table_prop,
             optional(seq($._field_sep, $._type_table_prop_list)),
+            optional($._field_sep), // trailing allowed
           ),
           seq(
             $._type_table_indexer,
             repeat(seq($._field_sep, $._type_table_prop)),
           ),
-        ),
+        )),
 
       // TypePack ::= '(' [TypeList] ')'
       type_pack: ($) =>
@@ -1038,14 +1041,14 @@ export default grammar({
 
       // TypeList ::= Type [',' TypeList] | '...' Type
       _type_list: ($) =>
-        choice(
+        prec.left(choice(
           seq(
             $.type,
-            optional( repeat(seq(",", $.type)) )
+            optional( repeat(seq(",", $._type_list)) )
           ),
           $.variadic_type_pack, // reduced '...' Type
           //seq("...", $.type),
-        ),
+        )),
       // BoundTypeList ::= [NAME ':'] Type [',' BoundTypeList]
       // | GenericTypePack | VariadicTypePack
       _bound_type_list: ($) =>
@@ -1077,7 +1080,11 @@ export default grammar({
       table_type: ($) =>
         choice(
           seq("{", $.type, "}"),
-          seq("{", optional($._type_table_prop_list), "}")
+          seq(
+            "{",
+            optional($._type_table_prop_list),
+            "}"
+          )
         ),
 
       // FunctionType ::= ['<' GenericTypeList '>'] '(' [BoundTypeList] ')' '->' ReturnType
