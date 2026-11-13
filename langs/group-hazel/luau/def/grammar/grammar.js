@@ -1245,7 +1245,7 @@ export default grammar({
     _contextual_keyword: (_) => prec(1, "global"),
     
     // Name
-    // also excludes @ and ? due to attributes
+    // also contains @ and ? due to attributes
     identifier: (_) => {
       const identifier_start =
         // @ts-ignore
