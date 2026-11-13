@@ -1,40 +1,48 @@
-; Preproc
-(hash_bang_line) @keyword.directive
-
 ; Keywords
 "return" @keyword.return
 
 [
-  "local"
-  "type"
-  "export"
+    "local"
+    "const"
+    "type"
+    "export"
 ] @keyword
 
-(do_statement
+
+; Simple Expressions
+(nil) @constant.builtin
+(boolean) @boolean
+(number) @number
+(string) @string
+(expr_vararg) @variable.builtin
+
+
+; Statements
+(stat_do
   [
     "do"
     "end"
   ] @keyword)
 
-(while_statement
+(stat_while
   [
     "while"
     "do"
     "end"
   ] @keyword.repeat)
 
-(repeat_statement
+(stat_repeat
   [
     "repeat"
     "until"
   ] @keyword.repeat)
 
 [
-  (break_statement)
-  (continue_statement)
+  (stat_break)
+  (stat_continue)
 ] @keyword.repeat
 
-(if_statement
+(stat_if
   [
     "if"
     "elseif"
@@ -43,13 +51,13 @@
     "end"
   ] @keyword.conditional)
 
-(if_expression
+(expr_ifConditional
   [
     "if"
     "then"
   ] @keyword.conditional)
 
-(elseif_statement
+(stat_elseif
   [
     "elseif"
     "then"
@@ -62,7 +70,7 @@
     "then"
   ] @keyword.conditional)
 
-(else_statement
+(stat_else
   [
     "else"
     "end"
@@ -71,7 +79,7 @@
 (else_clause
   "else" @keyword.conditional)
 
-(for_statement
+(stat_for
   [
     "for"
     "do"
@@ -84,11 +92,26 @@
     "end"
   ] @keyword.function)
 
-(function_definition
+(expr_function_definition
   [
     "function"
     "end"
   ] @keyword.function)
+
+
+; Classes
+(stat_classDef
+  [
+    "class"
+    "end"
+  ] @keyword)
+
+(class_field
+  [
+    "public"
+  ] @keyword)
+
+
 
 ; Operators
 [
@@ -129,39 +152,30 @@
   "//="
 ] @operator
 
+
 ; Variables
 (identifier) @variable
+
 
 ; Types
 (type
   (identifier) @type)
 
-(type
-  (generic_type
-    (identifier) @type))
+;(type_cast_expr "::" @operator)
+("::" @operator)
 
 (builtin_type) @type.builtin
 
-((identifier) @type
-  (#lua-match? @type "^[A-Z]"))
 
 ; Typedefs
-(type_definition
-  "type"
-  .
-  (type) @type.definition
-  "=")
+(type_definition_stat
+  name: (identifier) @type.definition)
 
-; Constants
-((identifier) @constant
-  (#lua-match? @constant "^[A-Z][A-Z_0-9]+$"))
 
 ; Builtins
 ((identifier) @constant.builtin
   (#eq? @constant.builtin "_VERSION"))
 
-((identifier) @variable.builtin
-  (#eq? @variable.builtin "self"))
 
 "..." @variable.builtin
 
@@ -178,7 +192,7 @@
 (dot_index_expression
   field: (identifier) @variable.member)
 
-(object_type
+(table_type
   (identifier) @variable.member)
 
 (table_constructor
@@ -211,7 +225,7 @@
     (dot_index_expression
       field: (identifier) @function))
 
-(method_index_expression
+(namecall_index_expression
   method: (identifier) @function.method.call)
 
 (function_call
@@ -227,25 +241,20 @@
     "__idiv" "__index" "__le" "__len" "__lt" "__metatable" "__mod" "__mul" "__name" "__newindex"
     "__pairs" "__pow" "__shl" "__shr" "__sub" "__tostring" "__unm"))
 
-; Literals
-(number) @number
 
-(string) @string
 
-(nil) @constant.builtin
 
-(vararg_expression) @variable.builtin
+; Attributes
+(attribute "@" @attribute)
+(attribute "@[" @attribute)
+(attribute name: (identifier) @attribute)
+(parattr name: (identifier) @attribute)
 
-[
-  (false)
-  (true)
-] @boolean
 
 ; Punctuations
 [
   ";"
   ":"
-  "::"
   ","
   "."
   "->"
@@ -260,22 +269,14 @@
   "}"
 ] @punctuation.bracket
 
-(variable_list
-  attribute:
-    (attribute
-      ([
-        "<"
-        ">"
-      ] @punctuation.bracket
-        (identifier) @attribute)))
 
-(generic_type
+(genericTypeList_angle_wrapper
   [
     "<"
     ">"
   ] @punctuation.bracket)
 
-(generic_type_list
+(type_definition_stat
   [
     "<"
     ">"
@@ -300,16 +301,26 @@
       .
       (_)
       .
-      (string
-        content: _ @string.regexp)))
+      (as_expr
+        (string
+          content: _ @string.regexp))))
 
 ; ("123"):match("%d+")
 (function_call
-  (method_index_expression
+  (namecall_index_expression
     method: (identifier) @_method
     (#any-of? @_method "find" "format" "match" "gmatch" "gsub"))
   arguments:
     (arguments
       .
-      (string
-        content: _ @string.regexp)))
+      (as_expr
+        (string
+          content: _ @string.regexp))))
+
+
+
+
+; Other
+
+((identifier) @keyword
+  (#eq? @keyword "self"))

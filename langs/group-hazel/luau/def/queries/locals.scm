@@ -1,24 +1,25 @@
 ; Scopes
 [
   (chunk)
-  (do_statement)
-  (while_statement)
-  (repeat_statement)
-  (if_statement)
-  (for_statement)
+  (stat_do)
+  (stat_while)
+  (stat_repeat)
+  (stat_if)
+  (stat_for)
   (function_declaration)
-  (function_definition)
+  (expr_function_definition)
+  (stat_classDef)
 ] @local.scope
 
 ; References
 (identifier) @local.reference
 
 ; Definitions
-(assignment_statement
+(stat_assignment
   (variable_list
     (identifier) @local.definition.var))
 
-(assignment_statement
+(stat_assignment
   (variable_list
     (dot_index_expression
       .
@@ -38,11 +39,8 @@
   (#set! definition.method.scope "parent"))
 
 ((function_declaration
-  name:
-    (method_index_expression
-      .
-      (_) @local.definition.associated
-      (identifier) @local.definition.method))
+  name: (namecall_index_expression
+    method: (identifier) @local.definition.method))
   (#set! definition.method.scope "parent"))
 
 (for_generic_clause

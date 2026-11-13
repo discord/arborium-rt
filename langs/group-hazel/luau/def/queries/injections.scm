@@ -28,20 +28,22 @@
       .
       (_)
       .
-      (string
-        content: _ @injection.content))
+      (_
+        (string
+          content: _ @injection.content)))
   (#set! injection.language "luap"))
 
 ; ("123"):match("%d+")
 (function_call
-  (method_index_expression
+  (namecall_index_expression
     method: (identifier) @_method
     (#any-of? @_method "find" "format" "match" "gmatch" "gsub"))
   arguments:
     (arguments
       .
-      (string
-        content: _ @injection.content))
+      (_
+        (string
+          content: _ @injection.content)))
   (#set! injection.language "luap"))
 
 ((comment) @injection.content
