@@ -841,16 +841,17 @@ export default grammar({
         
         stat_classDef: ($) => {
           return seq(
-            //seq(
+            seq(
+              optional("export"),
               //optional("open"), // This is not confirmed yet
               "class",
-            //),
+            ),
             $.identifier,
             optional(
-              seq(
+              //seq(
                 //"extends", // This is not confirmed yet
                 $.identifier
-              )
+              //)
             ),
             field("body", optional($.class_body)),
             "end"
@@ -1111,10 +1112,10 @@ export default grammar({
       ),
     },
 
+    
     /**
      * Other
      */
-
     ...{
       // littable ::= '{' [litfieldlist] '}'
       littable: ($) =>
