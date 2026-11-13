@@ -1,5 +1,6 @@
 /**
  * @file Luau is a small, fast, and embeddable programming language based on Lua with a gradual type system.
+ * @author Munif Tanjim, Amaan Qureshi, karl-police
  * @license MIT
  */
 
@@ -68,14 +69,12 @@ const list_seq = (rule, separator, trailing_separator = false) =>
 /**
  * @param {GrammarSymbols<string>} $
  */
-// @ts-ignore
 const optional_block = ($) => alias(optional($._block), $.block);
 
 
 /**
  * @param {GrammarSymbols<string>} $
  */
-// @ts-ignore
 const name_list = ($) => list_seq(field('name', $.identifier), ',');
 
 
@@ -83,16 +82,20 @@ const name_list = ($) => list_seq(field('name', $.identifier), ',');
  * bindinglist ::= binding [',' bindinglist] (* equivalent of Lua 5.1 'namelist', except with optional type annotations *)
  * @param {GrammarSymbols<string>} $
  */
-// @ts-ignore
-// @ts-ignore
-const binding_list = ($) => {
-  return list_seq(
-    seq(
-      field( "name", $.identifier ),
-      optional( seq(_STR_COLON, $.type) )
-    ),
-    ","
-  );
+const binding_list_func = ($) => {
+  return list_seq($._binding, ",")
+}
+
+/**
+ * @param {GrammarSymbols<string>} $
+ */
+const binding_func = ($) => {
+  return seq(
+    field("name", $.identifier),
+    optional(
+      seq(":", field("type", $.type))
+    )
+  )
 }
 
 
@@ -117,14 +120,20 @@ export default grammar({
   ],
 
   // Things in here will not appear in the node tree
-  supertypes: ($) => [$.statement, $.expression, $.declaration, $.expr_variable, $.type],
+  supertypes: ($) => [
+    $.statement, $.expression, $.declaration, $.expr_variable, /*$.type*/
+    $.simple_expr
+  ],
 
   word: ($) => $.identifier,
 
 
-  // Other hack...
+  // Other hacks...
   conflicts: ($) => [
-    [$.tuple_type, $.function_type_parameter],
+    [$._type_list, $._bound_type_list],
+    [$._simple_type, $._type_list, $._bound_type_list],
+    [$._simple_type, $._bound_type_list],
+    [$._named_type],
   ],
 
   rules: {
@@ -135,17 +144,19 @@ export default grammar({
     chunk: ($) =>
       seq(
         optional($.hash_bang_line),
-        repeat($.statement),
-        optional($.stat_return)
+        $._block
       ),
 
     hash_bang_line: (_) => /#.*/,
 
-    // block ::= {stat} [retstat]
+    // block ::= {stat [';']} [laststat [';']]
     _block: ($) =>
       choice(
-        seq(repeat1($.statement), optional($.stat_return)),
-        seq(repeat($.statement), $.stat_return)
+        $.last_stat, // cheat
+        seq(
+          repeat1(seq($.statement, optional(";"))),
+          optional(seq($.last_stat, optional(";")))
+        ),
       ),
 
     /**
@@ -153,24 +164,57 @@ export default grammar({
      * Expressions are things that can produce something
      * this includes function and anything that you write in the right assignment
      */
+    // exp ::= asexp { binop exp } | unop exp { binop exp }
+    // asexp leads to the other ones
     expression: ($) => {
       return choice(
-        $.nil,
-        $.boolean,
-        $.number,
-        $.string,
-        $.expr_vararg,
-        $.expr_variable,
-        $.function_definition,
-        $.function_call,
-        $.parenthesized_expression,
-        $.binary_expression,
-        $.unary_expression,
-        $.table_constructor,
+          $.as_expr,
+          $.binary_expression,
+          $.unary_expression,
+        )
+    },
 
-        $.expr_ifConditional,
-        $.type_cast_expression,
-      )
+    ...{
+      // asexp ::= simpleexp ['::' Type]
+      as_expr: ($) => prec.left(seq(
+        $.simple_expr,
+        optional($.type_cast_expr)
+      )),
+
+      type_cast_expr: ($) =>
+        prec.right(
+          PREC.CAST,
+          seq(
+            "::",
+            field("type", $.type)
+          )
+        ),
+
+      // prefixexp ::= var | functioncall | '(' exp ')'
+      _prefix_expr: ($) =>
+        prec(1, 
+          choice(
+            $.expr_variable,
+            $.function_call,
+            $.parenthesized_expression
+          )
+        ),
+
+      // simpleexp ::= NUMBER | STRING | 'nil' | 'true' | 'false' |
+      // '...' | tableconstructor | attributes 'function' funcbody | prefixexp | ifelseexp | stringinterp
+      simple_expr: ($) => {
+        return choice(
+          $.number,
+          $.string, // also has "stringinterp"
+          $.nil,
+          $.boolean,
+          $.expr_vararg,
+          $.table_constructor,
+          $.expr_function_definition, // attributes 'function' funcbody
+          $._prefix_expr,
+          $.expr_ifConditional,
+        )
+      },
     },
 
     // Basic expressions
@@ -202,17 +246,13 @@ export default grammar({
     },
 
     ...{
-      // prefixexp ::= var | functioncall | '(' exp ')'
-      _prefix_expression: ($) =>
-        prec(1, choice($.expr_variable, $.function_call, $.parenthesized_expression)),
-
       /**
        * prefixexp [ exp ]
        * tbl["Hello!"]
        */
       bracket_index_expression: ($) =>
         seq(
-          field("table", $._prefix_expression),
+          field("table", $._prefix_expr),
           "[",
           field("field", $.expression),
           "]"
@@ -223,7 +263,7 @@ export default grammar({
        */
       dot_index_expression: ($) =>
         seq(
-          field("table", $._prefix_expression),
+          field("table", $._prefix_expr),
           _STR_DOT,
           field("field", $.identifier)
         ),
@@ -233,22 +273,23 @@ export default grammar({
        */
       namecall_index_expression: ($) =>
         seq(
-          field("table", $._prefix_expression),
+          field("table", $._prefix_expr),
           _STR_COLON,
           field("method", $.identifier)
         ),
 
-      // explist ::= exp {',' exp}
+      // explist ::= {exp ','} exp
       _expression_list: ($) => list_seq($.expression, ","),
 
 
+      // ifelseexp ::= 'if' exp 'then' exp {'elseif' exp 'then' exp} 'else' exp
       expr_ifConditional: $ => prec.right(seq(
         "if",
         field("condition", $.expression),
         "then",
         field("consequence", $.expression),
         repeat($.elseif_clause),
-        optional($.else_clause),
+        optional($.else_clause), // uhh...
       )),
       elseif_clause: $ => seq(
         'elseif',
@@ -259,12 +300,6 @@ export default grammar({
       else_clause: $ => seq(
         'else',
         field('consequence', $.expression),
-      ),
-
-      for_generic_clause: ($) => seq(
-        alias($._binding_list, $.variable_list),
-        'in',
-        alias($._expression_list, $.expression_list),
       ),
     },
 
@@ -290,19 +325,22 @@ export default grammar({
       _vararg_parameter: ($) =>
         seq($.expr_vararg, optional(field("name", $.identifier))),
 
-      // functioncall ::=  prefixexp args | prefixexp ':' Name args
+      // functioncall ::= prefixexp funcargs | prefixexp ':' NAME funcargs
       function_call: ($) =>
-        seq(
+        prec(2, seq(
           field("name",
             choice(
-              $._prefix_expression,
+              $._prefix_expr,
               $.namecall_index_expression
             )
           ),
+          optional(
+            repeat(field("generic_args", $.genericTypeList_angle_wrapper))
+          ), // uhh...
           field("arguments",
             $.arguments
           )
-        ),
+        )),
 
       // args ::=  '(' [explist] ')' | tableconstructor | LiteralString
       arguments: ($) =>
@@ -312,14 +350,22 @@ export default grammar({
           $.string
         ),
 
-      // functiondef ::= function funcbody
-      function_definition: ($) => seq("function", $._function_body),
-      // funcbody ::= '(' [parlist] ')' block end
+      // attributes 'function' funcbody
+      expr_function_definition: ($) =>
+        seq(optional(field("attributes", $.attributes)), "function", $._function_body),
+      
+      genericTypeList_angle_wrapper: ($) => seq("<", $.generic_type_list, ">",),
+
+      // funcbody ::= ['<' GenericTypeList '>'] '(' [parlist] ')' [':' ReturnType] block 'end'
       _function_body: ($) =>
         seq(
-          optional($.generic_type_list),
-          field("parameters", $.parameters),
-          optional(seq(':', $.type)),
+          optional($.genericTypeList_angle_wrapper),
+          "(",
+            field("parameters", optional($._parameter_list)),
+          ")",
+          optional(seq(
+            ":", field("return_type", $._return_type),
+          )),
           field("body", optional_block($)),
           "end"
         ),
@@ -389,7 +435,9 @@ export default grammar({
         "`",
       ),
 
-      _interpolation_string_content: (_) => choice(token.immediate(prec(1, /[^`\{\\]+/)), '\\{'),
+      //_interpolation_string_content: (_) => choice(token.immediate(prec(1, /[^`\{\\]+/)), '\\{'),
+      _interpolation_string_content: (_) =>
+        choice(token.immediate(prec(1, /[^`\{\\]+/)), token.immediate('\\{')),
 
       interpolation: ($) => seq('{', $.expression, '}'),
     },
@@ -434,7 +482,7 @@ export default grammar({
 
     // Binary and Unary expressions
     ...{
-      // exp binop exp
+      // binop ::=
       binary_expression: ($) =>
         choice(
           ...[
@@ -484,12 +532,12 @@ export default grammar({
           )
         ),
 
-      // unop exp
+      // unop ::=
       unary_expression: ($) =>
         prec.left(
           PREC.UNARY,
           seq(
-            field('operator', choice('not', '#', '-', '~')),
+            field('operator', choice("-", "not", "#")),
             field('operand', $.expression),
           )
         ),
@@ -501,8 +549,6 @@ export default grammar({
       table_constructor: ($) => seq("{", optional($._field_list), "}"),
       // fieldlist ::= field {fieldsep field} [fieldsep]
       _field_list: ($) => list_seq($.field, $._field_sep, true),
-      // fieldsep ::= ',' | ';'
-      _field_sep: (_) => choice(",", ";"),
       // field ::= '[' exp ']' '=' exp | Name '=' exp | exp
       field: ($) =>
         choice(
@@ -516,6 +562,8 @@ export default grammar({
           seq(field("name", choice($._contextual_keyword, $.identifier)), "=", field("value", $.expression)),
           field("value", $.expression)
         ),
+      // fieldsep ::= ',' | ';'
+      _field_sep: (_) => choice(",", ";"),
     },
 
 
@@ -529,8 +577,8 @@ export default grammar({
         $.stat_assignment,
         $.stat_compoundAssign,
         $.function_call,
-        $.stat_break,
-        $.stat_continue,
+        //$.stat_break, // in last_stat
+        //$.stat_continue, // in last_stat
         //$.label_statement,
         //$.goto_statement,
         $.stat_do,
@@ -540,18 +588,21 @@ export default grammar({
         $.stat_for,
         $.stat_classDef,
         $.declaration,
-        $.type_definition
+
+        $.type_definition_stat,
+        $.type_function_stat,
       ),
 
     // Simple statements
     ...{
-      // retstat ::= return [explist] [';']
       stat_return: ($) =>
         seq(
           'return',
           optional(alias($._expression_list, $.expression_list)),
-          optional(';')
         ),
+      // laststat ::= 'return' [explist] | 'break' | 'continue'
+      last_stat: ($) =>
+        choice($.stat_return, $.stat_break, $.stat_continue),
 
       // ';'
       empty_statement: (_) => ";",
@@ -572,6 +623,7 @@ export default grammar({
 
 
       // Luau!
+      // compoundop ::=
       stat_compoundAssign: ($) =>
         seq(
           alias($._variable_assignment_varlist, $.variable_list),
@@ -589,7 +641,7 @@ export default grammar({
       // goto Name
       //goto_statement: ($) => seq('goto', $.identifier),
       
-      // do block end
+      // 'do' block 'end'
       stat_do: ($) => {
         return seq(
           "do",
@@ -633,7 +685,7 @@ export default grammar({
       // namelist in explist
       for_generic_clause: ($) =>
         seq(
-          alias($._name_list, $.variable_list),
+          alias($._binding_list, $.variable_list),
           'in',
           alias($._expression_list, $.expression_list)
         ),
@@ -647,11 +699,20 @@ export default grammar({
           field('end', $.expression),
           optional(seq(',', field('step', $.expression)))
         ),
-      // namelist ::= Name {',' Name}
-      _name_list: ($) => name_list($),
+
+      // binding ::= NAME [':' Type]
+      _binding: ($) =>
+        seq(
+          field("name", $.identifier),
+          optional(
+            seq(":", field("type", $.type))
+          )
+        ),
+      // bindinglist ::= binding [',' bindinglist] (* equivalent of Lua 5.1 'namelist', except with optional type annotations *)
+      _binding_list: ($) => list_seq($._binding, ","),
 
       
-      // while exp do block end
+      // 'while' exp 'do' block 'end'
       stat_while: ($) =>
         seq(
           "while",
@@ -661,7 +722,7 @@ export default grammar({
           "end"
         ),
 
-      // repeat block until exp
+      // 'repeat' block 'until' exp
       stat_repeat: ($) =>
         seq(
           "repeat",
@@ -670,21 +731,72 @@ export default grammar({
           field("condition", $.expression)
         ),
 
+      // attributes 'function' funcname funcbody
+      // this is a stat
+      function_declaration: ($) =>
+        seq(
+          optional(field("attributes", $.attributes)),
+          "function", field("name", $._function_name), $._function_body),
+      // attributes 'local' 'function' NAME funcbody
+      _local_function_declaration: ($) =>
+        seq(
+          optional(field("attributes", $.attributes)),
+          "local",
+          "function", field("name", $.identifier),
+          $._function_body
+        ),
 
-      // function funcname funcbody
-      // local function Name funcbody
+      // 'local' bindinglist ['=' explist]
+      variable_declaration: ($) =>
+        seq(
+          "local",
+          alias($._binding_list, $.variable_list),
+          optional(seq(
+            field("operator", "="),
+            alias($._variable_assignment_explist, $.expression_list)
+          ))
+        ),
+        
+      // 'const' 'function' NAME funcbody
+      _const_function_declaration: ($) =>
+        seq(
+          optional(field("attributes", $.attributes)),
+          "const",
+          "function", field("name", $.identifier),
+          $._function_body
+        ),
+
+      // 'const' bindinglist '=' explist
+      _const_var_declaration: ($) =>
+        seq(
+            "const",
+            alias($._binding_list, $.variable_list),
+            field("operator", "="),
+            alias($._variable_assignment_explist, $.expression_list)
+          ),
+      // Aliases are there because they help with hidden node tree rules
+
+
+      // Remove the global stuff below?
+      //
       // global function Name funcbody
-      // local attnamelist [‘=’ explist]
       // global attnamelist [‘=’ explist]
       // global [attrib] ‘*’
+      // Helper
       declaration: ($) =>
         choice(
           $.function_declaration,
           field(
-            "local_declaration",
-            alias($._local_function_declaration, $.function_declaration)
+            "local_declaration", alias($._local_function_declaration, $.function_declaration)
           ),
           field("local_declaration", $.variable_declaration),
+
+          field(
+            "const_declaration", alias($._const_function_declaration, $.function_declaration)
+          ),
+          field(
+            "const_declaration", alias($._const_var_declaration, $.variable_declaration)
+          ),
 
           field(
             "global_declaration",
@@ -697,26 +809,6 @@ export default grammar({
           field(
             "global_declaration",
             alias($._global_implicit_variable_declaration, $.implicit_variable_declaration)
-          )
-        ),
-      // function funcname funcbody
-      function_declaration: ($) =>
-        seq('function', field('name', $._function_name), $._function_body),
-
-      // local function Name funcbody
-      _local_function_declaration: ($) =>
-        seq(
-          choice("local", "const"), // const HACK!
-          "function", field("name", $.identifier), $._function_body
-        ),
-
-      // local attnamelist [‘=’ explist]
-      variable_declaration: ($) =>
-        seq(
-          choice("local", "const"), // const HACK!
-          choice(
-            alias($._att_name_list, $.variable_list),
-            alias($._variable_assignment, $.stat_assignment)
           )
         ),
 
@@ -733,7 +825,8 @@ export default grammar({
       // global function Name funcbody
       _global_function_declaration: ($) =>
         seq('global', 'function', field('name', $.identifier), $._function_body),
-      // funcname ::= Name {'.' Name} [':' Name]
+
+      // funcname ::= NAME {'.' NAME} [':' NAME]
       _function_name: ($) =>
         choice(
           $._function_name_prefix_expression,
@@ -802,23 +895,39 @@ export default grammar({
 
 
       // Classes
-      stat_classDef: ($) => {
-        return seq(
+      ...{
+        class_member: ($) =>
+          choice(
+            $.class_field,
+            $.class_method,
+          ),
+        class_field: ($) =>
           seq(
-            optional("open"), // This is not confirmed yet
-            "class",
+            "public",
+            binding_func($),
           ),
-          $.identifier,
-          optional(
+        class_method: ($) => $.function_declaration,
+
+        class_body: ($) => repeat1($.class_member),
+        
+        stat_classDef: ($) => {
+          return seq(
             seq(
-              "extends", // This is not confirmed yet
-              $.identifier
-            )
-          ),
-          field("body", optional_block($)),
-          "end"
-        )
-      },
+              optional("open"), // This is not confirmed yet
+              "class",
+            ),
+            $.identifier,
+            optional(
+              seq(
+                "extends", // This is not confirmed yet
+                $.identifier
+              )
+            ),
+            field("body", optional($.class_body)),
+            "end"
+          )
+        },
+      }
 
     },
 
@@ -826,24 +935,15 @@ export default grammar({
     /**
      * Types
      */
-    type: $ => choice(
-      prec.right($.identifier),
-      $.builtin_type,
-      $.tuple_type,
-      $.function_type,
-      $.generic_type,
-      $.table_type,
-      $.empty_type,
-      $.field_type,
-      $.intersection_type,
+    type: ($) => choice(
+      $._type_operand,
+
       $.union_type,
-      $.optional_type,
-      $.literal_type,
-      $.variadic_type,
+      $.intersection_type,
     ),
 
 
-    // Type defs
+    // Types stuff
     ...{
       builtin_type: _ => choice(
         "any",
@@ -859,102 +959,312 @@ export default grammar({
         "buffer",
       ),
 
-      tuple_type: $ => seq("(", list_seq($.type, ","), ")"),
 
-      empty_type: _ => seq("(", ")"),
+      _type_operand: ($) => choice($._simple_type, $._optional_type),
+      _optional_type: ($) => prec.left(4, seq($._type_operand, "?")),
 
-      function_type: $ => prec.right(seq(
-        optional($.generic_type_list),
-        "(",
-        optional(list_seq($.function_type_parameter, ",")),
-        ")",
-        "->",
-        field("return_type", $.type),
-      )),
-      function_type_parameter: $ => seq(
-        optional(seq(field("name", $.identifier), ":")),
-        field("type", $.type),
-      ),
-
-      generic_type: $ => seq(
-        $.type,
-        token(prec(1, "<")),
-        list_seq(seq($.type, optional($.expr_vararg)), ","),
-        ">",
-      ),
-
-      table_type: $ => seq(
-        "{",
-        optional(choice(
-          list_seq(
-            seq(choice($.identifier, $.table_field_type), ':', $.type),
-            ","
-          ),
-          list_seq($.type, ","),
-        )),
-        optional(","),
-        "}",
-      ),
-
-
-      field_type: $ => sep2($.identifier, '.'),
-      table_field_type: $ => seq('[', $.type, ']'),
-      union_type: $ => prec.left(1, seq($.type, '|', $.type)),
-      intersection_type: $ => prec.left(2, seq($.type, '&', $.type)),
-      optional_type: $ => seq($.type, '?'),
-      literal_type: $ => choice($.string, $.boolean),
-      variadic_type: $ => prec.right(seq('...', $.type)),
-    },
-
-
-    // Types stuff
-    ...{
-      type_definition: $ => seq(
-        optional("export"),
-        "type",
-        field("name", $.type),
-        "=",
-        choice(
-          $.type,
-          seq("typeof", "(", $.expression, ")"),
+      // SimpleType ::=
+      _simple_type: ($) => choice(
+          //"nil",
+          $.builtin_type, // I think?
+          $.singleton_type,
+          $._named_type,
+          $._typeof_type,
+          $.table_type,
+          $.function_type,
+          seq("(", $.type, ")"), // '(' Type ')'
         ),
+
+      // SingletonType ::= STRING | 'true' | 'false'
+      singleton_type: ($) => choice($.string, $.boolean),
+
+      // NAME ['.' NAME] [ '<' [TypeParams] '>' ]
+      _named_type: ($) => seq(
+        $.identifier,
+        optional( seq(".", $.identifier) ),
+        optional( seq( "<", optional($.type_params), ">" ) ),
+      ),
+      // 'typeof' '(' exp ')'
+      _typeof_type: ($) => seq("typeof", "(", $.expression, ")"),
+      
+      // Union ::= [SimpleType {'?'}] {'|' SimpleType {'?'}}
+      union_type: ($) => prec.left(1,
+        seq(
+          //optional(seq($._simple_type, repeat("?"))),
+          //repeat1(seq("|", $._simple_type, repeat("?"))),
+          optional($._type_operand),
+          repeat1(seq("|", $._type_operand)),
+        )
+      ),
+      // Intersection ::= [SimpleType] {'&' SimpleType}
+      intersection_type: ($) => prec.left(2,
+        seq(
+          //optional($._simple_type),
+          optional($._type_operand),
+          repeat1(seq("&", $._simple_type)),
+        )
       ),
 
-      generic_type_list: $ => seq(
-        repeat1("<"), // "repeat1" here supports << I think
-        optional(
-          list_seq(
-            seq(
-              $.identifier,
-              optional($.expr_vararg)
-            ),
-            ","
+      // GenericTypePackParameterWithDefault ::= NAME '...' '=' (TypePack | VariadicTypePack | GenericTypePack)
+      generic_type_pack_parameter_with_default: $ => seq(
+        field("name", $.identifier),
+        "...",
+        "=",
+        field("default",
+          choice(
+            $.type_pack,
+            $.variadic_type_pack,
+            $.generic_type_pack,
           )
         ),
-        repeat1(">"),
       ),
 
-      type_cast_expression: $ => prec(PREC.CAST, seq(
-        $.expression,
-        "::",
-        $.type,
-      )),
+      _generic_type_with_default: $ => seq(
+        $.identifier,
+        optional(seq("=", $.type)),
+      ),
+
+      // GenericTypeListWithDefaults ::=
+      generic_type_list_with_defaults: $ => choice(
+        // NAME ['=' Type] [',' GenericTypeListWithDefaults]
+        seq(
+          field("parameter", $._generic_type_with_default),
+          optional(seq(
+            ",",
+            $.generic_type_list_with_defaults,
+          )),
+        ),
+
+        // GenericTypePackParameterWithDefault
+        // {',' GenericTypePackParameterWithDefault}
+        seq(
+          field("parameter", $.generic_type_pack_parameter_with_default),
+          repeat(seq(
+            ",",
+            field("parameter", $.generic_type_pack_parameter_with_default),
+          )),
+        ),
+      ),
+
+      // GenericTypePackParameter ::= NAME '...'
+      _generic_type_pack_param: ($) =>
+        seq($.identifier, "..."),
+
+      // GenericTypeList ::= NAME [',' GenericTypeList]
+      //  | GenericTypePackParameter {',' GenericTypePackParameter}
+      generic_type_list: ($) =>
+        choice(
+          list_seq($.identifier, ","),
+          list_seq($._generic_type_pack_param, ","),
+        ),
+
+      // GenericTypePack ::= NAME '...'
+      generic_type_pack: ($) =>
+        seq($.identifier, "..."),
+      // VariadicTypePack ::= '...' Type
+      variadic_type_pack: ($) =>
+        prec.right(seq("...", $.type)),
+
+      // ReturnType ::= Type | TypePack | GenericTypePack | VariadicTypePack
+      _return_type: ($) =>
+        choice(
+          $.type,
+          $.type_pack,
+          $.generic_type_pack,
+          $.variadic_type_pack,
+        ),
+      
+      _type_table_read_write: ($) => choice("read", "write"),
+      // TableIndexer ::= ['read' | 'write'] '[' Type ']' ':' Type
+      _type_table_indexer: ($) =>
+        seq(
+          optional($._type_table_read_write),
+          "[", $.type, "]", ":", $.type,
+        ),
+      // TableProp ::= ['read' | 'write'] NAME ':' Type
+      _type_table_prop: ($) =>
+        seq(
+          optional($._type_table_read_write),
+          $.identifier, ":", $.type,
+        ),
+      // PropList ::= TableProp [fieldsep PropList]
+      // | TableIndexer {fieldsep TableProp}
+      _type_table_prop_list: ($) =>
+        choice(
+          seq(
+            $._type_table_prop,
+            optional(seq($._field_sep, $._type_table_prop_list)),
+          ),
+          seq(
+            $._type_table_indexer,
+            repeat(seq($._field_sep, $._type_table_prop)),
+          ),
+        ),
+
+      // TypePack ::= '(' [TypeList] ')'
+      type_pack: ($) =>
+        seq("(", optional($._type_list), ")"),
+
+
+      // TypeList ::= Type [',' TypeList] | '...' Type
+      _type_list: ($) =>
+        choice(
+          seq(
+            $.type,
+            optional( repeat(seq(",", $.type)) )
+          ),
+          $.variadic_type_pack, // reduced '...' Type
+          //seq("...", $.type),
+        ),
+      // BoundTypeList ::= [NAME ':'] Type [',' BoundTypeList]
+      // | GenericTypePack | VariadicTypePack
+      _bound_type_list: ($) =>
+        choice(
+          seq(
+            optional(seq($.identifier, ":")),
+            $.type,
+            optional(seq(",", $._bound_type_list)),
+          ),
+          $.generic_type_pack,
+          $.variadic_type_pack,
+        ),
+
+      // TypeParams ::= (Type | TypePack | VariadicTypePack | GenericTypePack)
+      // [',' TypeParams]
+      type_params: ($) =>
+        list_seq(
+          choice(
+            $.type,
+            $.type_pack,
+            $.variadic_type_pack,
+            $.generic_type_pack,
+          ),
+          ",",
+        ),
+
+
+      // TableType ::= '{' Type '}' | '{' [PropList] '}'
+      table_type: ($) =>
+        choice(
+          seq("{", $.type, "}"),
+          seq("{", optional($._type_table_prop_list), "}")
+        ),
+
+      // FunctionType ::= ['<' GenericTypeList '>'] '(' [BoundTypeList] ')' '->' ReturnType
+      function_type: ($) =>
+        prec.right(1, seq(
+          optional($.genericTypeList_angle_wrapper),
+          "(", optional($._bound_type_list), ")",
+          "->",
+          field("return_type", $._return_type),
+        )),
+
+
+      
+      // ['export'] 'type' NAME ['<' GenericTypeListWithDefaults '>'] '=' Type
+      type_definition_stat: $ => seq(
+        optional("export"),
+        "type",
+        field("name", $.identifier),
+        optional(seq(
+          "<", $.generic_type_list_with_defaults, ">",
+        )),
+        "=",
+        field("definition", $.type),
+      ),
+      // ['export'] 'type' 'function' NAME funcbody
+      type_function_stat: $ => seq(
+        optional("export"),
+        "type",
+        "function",
+        field("name", $.identifier),
+        $._function_body,
+      ),
     },
 
-    // uhhh...
-    special_self: (_) => "self",
+    /**
+     * Other
+     */
+
+    ...{
+      // littable ::= '{' [litfieldlist] '}'
+      littable: ($) =>
+        seq(
+          "{", optional($.litfieldlist), "}"
+        ),
+      // litfieldlist ::= litfield {fieldsep litfield} [fieldsep]
+      litfieldlist: ($) =>
+        list_seq(
+          $.litfield,
+          $._field_sep,
+          true
+        ),
+      // litfield ::= [NAME '='] literal
+      litfield: ($) =>
+        choice(
+          seq(
+            field("name", $.identifier), "=", field("value", $.literal)
+          ),
+          field("value", $.literal)
+        ),
+
+      // literal ::= 'nil' | 'false' | 'true' | NUMBER | STRING | littable
+      literal: ($) =>
+        choice(
+          $.nil,
+          $.boolean,
+          $.number,
+          $.string,
+          $.littable
+        ),
+      // litlist ::= literal {',' literal}
+      litlist: ($) =>
+        list_seq($.literal, ","),
+
+      // pars ::= '(' [litlist] ')' | littable | STRING
+      pars: ($) =>
+        choice(
+          seq(
+            "(", optional($.litlist), ")"
+          ),
+          $.littable,
+          $.string
+        ),
+
+      // parattr ::= NAME [pars]
+      parattr: ($) =>
+        seq(
+          field("name", $.identifier),
+          optional(field("parameters", $.pars))
+        ),
+      
+      // attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'
+      attribute: ($) =>
+        choice(
+          seq( "@", field("name", $.identifier) ),
+          seq("@[", $.attribute_list, "]")
+        ),
+      attribute_list: ($) => list_seq($.parattr, ",", true),
+
+      // attributes ::= {attribute}
+      attributes: ($) =>
+        repeat1($.attribute),
+    },
+
+
 
     // only `global` for now
-    _contextual_keyword: (_) => 'global',
+    _contextual_keyword: (_) => prec(1, "global"),
     
     // Name
+    // also excludes @ and ? due to attributes
     identifier: (_) => {
       const identifier_start =
         // @ts-ignore
-        /[^\p{Control}\s+\-*/%^#&~|<>=(){}\[\];:,.\\'"\d]/;
+        /[^\p{Control}\s+\-*/%^#&~|<>=(){}\[\];:,.\\'"`@?\d]/;
       const identifier_continue =
         // @ts-ignore
-        /[^\p{Control}\s+\-*/%^#&~|<>=(){}\[\];:,.\\'"]*/;
+        /[^\p{Control}\s+\-*/%^#&~|<>=(){}\[\];:,.\\'"`@?]*/;
       return token(seq(identifier_start, identifier_continue));
     },
     
