@@ -143,8 +143,7 @@ export default grammar({
     // block ::= {stat [';']} [laststat [';']]
     _block: ($) =>
       choice(
-        //seq($.last_stat, optional(";"))
-        list_seq($.last_stat, ";", true), // cheat
+        seq($.last_stat, optional(";")), // cheat
         seq(
           repeat1(seq($.statement, optional(";"))),
           optional(seq($.last_stat, optional(";")))
