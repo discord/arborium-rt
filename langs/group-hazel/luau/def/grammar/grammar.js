@@ -78,13 +78,6 @@ const optional_block = ($) => alias(optional($._block), $.block);
 const name_list = ($) => list_seq(field('name', $.identifier), ',');
 
 
-/**
- * bindinglist ::= binding [',' bindinglist] (* equivalent of Lua 5.1 'namelist', except with optional type annotations *)
- * @param {GrammarSymbols<string>} $
- */
-const binding_list_func = ($) => {
-  return list_seq($._binding, ",")
-}
 
 /**
  * @param {GrammarSymbols<string>} $
