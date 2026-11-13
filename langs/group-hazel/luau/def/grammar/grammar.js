@@ -908,13 +908,13 @@ export default grammar({
         stat_classDef: ($) => {
           return seq(
             seq(
-              optional("open"), // This is not confirmed yet
+              //optional("open"), // This is not confirmed yet
               "class",
             ),
             $.identifier,
             optional(
               seq(
-                "extends", // This is not confirmed yet
+                //"extends", // This is not confirmed yet
                 $.identifier
               )
             ),
