@@ -92,7 +92,7 @@
     "end"
   ] @keyword.function)
 
-(function_definition
+(expr_function_definition
   [
     "function"
     "end"
@@ -155,9 +155,8 @@
 (type
   (identifier) @type)
 
-(type
-  (generic_type
-    (identifier) @type))
+(type_cast_expr "::" @operator)
+
 
 (builtin_type) @type.builtin
 
@@ -166,11 +165,8 @@
 
 
 ; Typedefs
-(type_definition
-  "type"
-  .
-  (type) @type.definition
-  "=")
+(type_definition_stat
+  name: (identifier) @type.definition)
 
 ; Constants
 ;((identifier) @constant
@@ -248,11 +244,19 @@
     "__pairs" "__pow" "__shl" "__shr" "__sub" "__tostring" "__unm"))
 
 
+
+
+; Attributes
+(attribute "@" @attribute)
+(attribute "@[" @attribute)
+(attribute name: (identifier) @attribute)
+(parattr name: (identifier) @attribute)
+
+
 ; Punctuations
 [
   ";"
   ":"
-  "::"
   ","
   "."
   "->"
@@ -276,13 +280,14 @@
       ] @punctuation.bracket
         (identifier) @attribute)))
 
-(generic_type
+
+(genericTypeList_angle_wrapper
   [
     "<"
     ">"
   ] @punctuation.bracket)
 
-(generic_type_list
+(type_definition_stat
   [
     "<"
     ">"
@@ -307,8 +312,9 @@
       .
       (_)
       .
-      (string
-        content: _ @string.regexp)))
+      (as_expr
+        (string
+          content: _ @string.regexp))))
 
 ; ("123"):match("%d+")
 (function_call
@@ -318,5 +324,14 @@
   arguments:
     (arguments
       .
-      (string
-        content: _ @string.regexp)))
+      (as_expr
+        (string
+          content: _ @string.regexp))))
+
+
+
+
+; Other
+
+((identifier) @keyword
+  (#eq? @keyword "self"))
