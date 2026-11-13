@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { Writable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 
 /**
  * Walk up from `start` until a directory contains a marker file identifying
@@ -185,7 +185,9 @@ export interface RunOptions {
 /**
  * Run a command with its stdout/stderr piped to `output` (typically a listr
  * task's stream). Rejects on non-zero exit; the Error message includes the
- * command for grep-ability.
+ * command for grep-ability plus the tail of the child's stderr, and is a
+ * `CommandError` carrying the full stderr (parallel grammar builds interleave
+ * the streamed output, so summaries reprint it).
  */
 export async function run(
 	output: Writable,
@@ -205,15 +207,12 @@ export async function run(
 			child.stdin?.end(options.input);
 		}
 		child.stdout?.pipe(output);
-		child.stderr?.pipe(output);
+		const stderr = teeStderr(child.stderr, output);
 
 		child.once("error", rejectPromise);
 		child.once("close", (code) => {
 			if (code === 0) resolvePromise();
-			else
-				rejectPromise(
-					new Error(`${cmd} ${args.join(" ")} exited with code ${code}`),
-				);
+			else rejectPromise(exitError(cmd, args, code, stderr()));
 		});
 	});
 }
@@ -245,16 +244,68 @@ export async function runCapture(
 		child.stdout?.on("data", (chunk: string) => {
 			stdout += chunk;
 		});
-		child.stderr?.pipe(output);
+		const stderr = teeStderr(child.stderr, output);
 		child.once("error", rejectPromise);
 		child.once("close", (code) => {
 			if (code === 0) resolvePromise(stdout);
-			else
-				rejectPromise(
-					new Error(`${cmd} ${args.join(" ")} exited with code ${code}`),
-				);
+			else rejectPromise(exitError(cmd, args, code, stderr()));
 		});
 	});
+}
+
+/** How many trailing stderr lines a failed command's Error message carries. */
+const STDERR_TAIL_LINES = 20;
+
+/**
+ * A command exited non-zero. `message` carries the command line plus the last
+ * `STDERR_TAIL_LINES` of stderr, which keeps the per-step `[FAILED: …]` lines
+ * short; `stderr` holds all of it, for end-of-run summaries.
+ */
+export class CommandError extends Error {
+	/** `<cmd> <args> exited with code <n>`. */
+	readonly command: string;
+	/** The child's complete stderr, blank lines dropped. */
+	readonly stderr: string;
+
+	constructor(command: string, stderr: string) {
+		const tail = stderr.split("\n").slice(-STDERR_TAIL_LINES).join("\n");
+		super(tail ? `${command}\n${tail}` : command);
+		this.name = "CommandError";
+		this.command = command;
+		this.stderr = stderr;
+	}
+}
+
+/**
+ * Forward `stream` to `output` while also buffering it. Returns a getter for
+ * everything seen so far, blank lines dropped.
+ */
+function teeStderr(stream: Readable | null, output: Writable): () => string {
+	let buffered = "";
+	if (stream) {
+		stream.pipe(output);
+		stream.setEncoding("utf8");
+		stream.on("data", (chunk: string) => {
+			buffered += chunk;
+		});
+	}
+	return () =>
+		buffered
+			.split(/\r?\n/)
+			.filter((line) => line.trim() !== "")
+			.join("\n");
+}
+
+function exitError(
+	cmd: string,
+	args: readonly string[],
+	code: number | null,
+	stderr: string,
+): CommandError {
+	return new CommandError(
+		`${cmd} ${args.join(" ")} exited with code ${code}`,
+		stderr,
+	);
 }
 
 export function normalizeCSymbol(cSymbol: string | undefined, lang: string) {
