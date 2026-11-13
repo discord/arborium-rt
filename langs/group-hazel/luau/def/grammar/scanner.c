@@ -154,7 +154,7 @@ static bool scan_comment_content(Scanner *scanner, TSLexer *lexer) {
   return false;
 }
 
-bool tree_sitter_lua_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
+bool tree_sitter_luau_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
   Scanner *scanner = (Scanner *)payload;
 
   if (valid_symbols[BLOCK_STRING_END] && scan_block_end(scanner, lexer)) {
