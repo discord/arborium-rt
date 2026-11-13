@@ -13,12 +13,12 @@
 // output stays readable on a shared terminal.
 
 import { availableParallelism } from "node:os";
-import { Listr, type ListrTask } from "listr2";
+import { Listr, type ListrTask, type ListrTaskObject } from "listr2";
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,
 } from "../../../lib/arborium-yaml.ts";
-import { paths } from "../../../lib/util.ts";
+import { CommandError, paths } from "../../../lib/util.ts";
 import { packageGrammar } from "../../package/wasm/grammars.ts";
 import { buildGrammar } from "./grammar.ts";
 
@@ -44,71 +44,86 @@ interface BuildAllContext {
 }
 
 export function buildAll(args: BuildAllArgs = {}) {
-	return new Listr<BuildAllContext>([
-		{
-			async task(ctx) {
-				const p = paths();
-				const index = await buildGrammarIndex(p.langsRoots);
-				ctx.index = index;
+	return new Listr<BuildAllContext>(
+		[
+			{
+				async task(ctx) {
+					const p = paths();
+					const index = await buildGrammarIndex(p.langsRoots);
+					ctx.index = index;
 
-				let targets =
-					args.only && args.only.length > 0
-						? args.only.filter((id) => index.has(id))
-						: [...index.keys()].sort();
-				if (args.group) {
-					targets = targets.filter((id) => index.get(id)?.group === args.group);
-				}
+					let targets =
+						args.only && args.only.length > 0
+							? args.only.filter((id) => index.has(id))
+							: [...index.keys()].sort();
+					if (args.group) {
+						targets = targets.filter(
+							(id) => index.get(id)?.group === args.group,
+						);
+					}
 
-				ctx.targets = targets;
+					ctx.targets = targets;
+				},
 			},
-		},
-		{
-			async task(ctx, task) {
-				ctx.perGrammar = task.newListr(
-					ctx.targets.map((id) => ({
-						async task(_ctx, task) {
-							// `concurrent: false` is load-bearing: listr2 merges the parent
-							// list's options into every nested list (see Listr's
-							// `result.options = { ...this.options, ...result.options }`), so
-							// without an explicit override this sub-list would inherit the
-							// outer `concurrent: availableParallelism()` and run a grammar's
-							// build + package steps in parallel. The per-grammar steps are
-							// strictly ordered (rm/stage → generate → compile → link →
-							// package), so they must stay sequential. `exitOnError: true`
-							// likewise overrides the outer `false`, so a failed step (e.g.
-							// `tree-sitter generate`) stops this grammar instead of running
-							// the compile/link/package steps against missing outputs.
-							return task.newListr(buildLang(args, id), {
-								ctx,
-								concurrent: false,
-								exitOnError: true,
-							});
+			{
+				async task(ctx, task) {
+					ctx.perGrammar = task.newListr(
+						ctx.targets.map((id) => ({
+							async task(_ctx, task) {
+								// `concurrent: false` is load-bearing: listr2 merges the parent
+								// list's options into every nested list (see Listr's
+								// `result.options = { ...this.options, ...result.options }`), so
+								// without an explicit override this sub-list would inherit the
+								// outer `concurrent: availableParallelism()` and run a grammar's
+								// build + package steps in parallel. The per-grammar steps are
+								// strictly ordered (rm/stage → generate → compile → link →
+								// package), so they must stay sequential. `exitOnError: true`
+								// likewise overrides the outer `false`, so a failed step (e.g.
+								// `tree-sitter generate`) stops this grammar instead of running
+								// the compile/link/package steps against missing outputs.
+								return task.newListr(buildLang(args, id), {
+									ctx,
+									concurrent: false,
+									exitOnError: true,
+								});
+							},
+						})),
+						{
+							concurrent: availableParallelism(),
+							exitOnError: false,
 						},
-					})),
-					{
-						concurrent: availableParallelism(),
-						collectErrors: true,
-						exitOnError: false,
-					},
-				);
-				return ctx.perGrammar;
-			},
-		},
-		{
-			// The per-grammar list swallows failures so every grammar gets
-			// attempted; surface them here so the command (and CI) fails.
-			async task(ctx) {
-				const failed = ctx.targets.filter((_, i) =>
-					ctx.perGrammar.tasks[i]?.hasFailed(),
-				);
-				if (failed.length > 0) {
-					throw new Error(
-						`${failed.length} of ${ctx.targets.length} grammar(s) failed: ${failed.join(", ")}`,
 					);
-				}
+					return ctx.perGrammar;
+				},
 			},
-		},
-	]);
+			{
+				// The per-grammar list swallows failures so every grammar gets
+				// attempted; surface them here so the command (and CI) fails. Each
+				// grammar's reason is repeated here because the streamed output of
+				// parallel builds interleaves, burying the failing line.
+				async task(ctx) {
+					const failed = ctx.targets.flatMap((id, i) => {
+						const task = ctx.perGrammar.tasks[i];
+						return task?.hasFailed()
+							? [{ id, reason: failureReason(task) }]
+							: [];
+					});
+					if (failed.length > 0) {
+						const details = failed
+							.map(({ id, reason }) => `\n\n--- ${id} ---\n${reason}`)
+							.join("");
+						throw new Error(
+							`${failed.length} of ${ctx.targets.length} grammar(s) failed: ${failed.map((f) => f.id).join(", ")}${details}`,
+						);
+					}
+				},
+			},
+		],
+		// Must be set on the root: every nested list shares the root's `errors`
+		// array (null unless the root collects), whatever its own options say.
+		// `failureReason` reads the original errors back out of it.
+		{ collectErrors: true },
+	);
 }
 
 function buildLang(
@@ -149,4 +164,21 @@ function buildLang(
 			},
 		},
 	];
+}
+
+/**
+ * The deepest failed step under `task`, as "<step title>: <error>". A failed
+ * command contributes its full stderr, not just the tail in its message.
+ */
+function failureReason(task: ListrTaskObject<BuildAllContext>): string {
+	// `subtasks` is typed as an array but is undefined on leaf tasks.
+	const failedChild = task.subtasks?.find((t) => t.hasFailed());
+	if (failedChild) return failureReason(failedChild);
+	// The original Error, from the root list's shared `errors` array.
+	const error = task.listr.errors?.find((e) => e.task === task)?.error;
+	const message =
+		error instanceof CommandError
+			? [error.command, error.stderr].filter(Boolean).join("\n")
+			: (task.message.error ?? "(no error message)");
+	return task.title ? `${task.title}: ${message}` : message;
 }
