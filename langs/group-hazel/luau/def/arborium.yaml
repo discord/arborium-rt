@@ -1,5 +1,5 @@
 repo: https://github.com/karl-police/tree-sitter-luau-new
-commit: ac065426aa2c4a830ea2ffed791fec2bd62bfa4d
+commit: 912dc89c993410bbb373a4269a6ef565755a7b4c
 license: MIT
 
 grammars:
