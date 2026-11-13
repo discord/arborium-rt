@@ -51,24 +51,24 @@ static inline void reset_state(Scanner *scanner) {
   scanner->level_count = 0;
 }
 
-void *tree_sitter_lua_external_scanner_create() {
+void *tree_sitter_luau_external_scanner_create() {
   Scanner *scanner = ts_calloc(1, sizeof(Scanner));
   return scanner;
 }
 
-void tree_sitter_lua_external_scanner_destroy(void *payload) {
+void tree_sitter_luau_external_scanner_destroy(void *payload) {
   Scanner *scanner = (Scanner *)payload;
   ts_free(scanner);
 }
 
-unsigned tree_sitter_lua_external_scanner_serialize(void *payload, char *buffer) {
+unsigned tree_sitter_luau_external_scanner_serialize(void *payload, char *buffer) {
   Scanner *scanner = (Scanner *)payload;
   buffer[0] = scanner->ending_char;
   buffer[1] = (char)scanner->level_count;
   return 2;
 }
 
-void tree_sitter_lua_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
+void tree_sitter_luau_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
   Scanner *scanner = (Scanner *)payload;
   if (length == 0) return;
   scanner->ending_char = buffer[0];
