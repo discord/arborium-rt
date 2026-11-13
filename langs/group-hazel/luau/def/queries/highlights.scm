@@ -161,7 +161,8 @@
 (type
   (identifier) @type)
 
-(type_cast_expr "::" @operator)
+;(type_cast_expr "::" @operator)
+("::" @operator)
 
 (builtin_type) @type.builtin
 
@@ -175,8 +176,6 @@
 ((identifier) @constant.builtin
   (#eq? @constant.builtin "_VERSION"))
 
-((identifier) @variable.builtin
-  (#eq? @variable.builtin "self"))
 
 "..." @variable.builtin
 
