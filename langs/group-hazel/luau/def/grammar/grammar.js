@@ -21,10 +21,6 @@ const PREC = {
   OR: 1, // or
   AND: 2, // and
   COMPARE: 3, // < > <= >= ~= ==
-  BIT_OR: 4, // |
-  BIT_NOT: 5, // ~
-  BIT_AND: 6, // &
-  BIT_SHIFT: 7, // << >>
   CONCAT: 8, // ..
   PLUS: 9, // + -
   MULTI: 10, // * / // %
@@ -51,9 +47,9 @@ const _STR_DOUBLE_QUOTE = '"'
  *
  * @returns {SeqRule}
  */
-function sep2(rule, sep) {
+/*function sep2(rule, sep) {
   return seq(rule, repeat1(seq(sep, rule)));
-}
+}*/
 
 
 /**
@@ -75,9 +71,16 @@ const optional_block = ($) => alias(optional($._block), $.block);
 /**
  * @param {GrammarSymbols<string>} $
  */
-const name_list = ($) => list_seq(field('name', $.identifier), ',');
+//const name_list = ($) => list_seq(field('name', $.identifier), ',');
 
 
+/**
+ * bindinglist ::= binding [',' bindinglist] (* equivalent of Lua 5.1 'namelist', except with optional type annotations *)
+ * @param {GrammarSymbols<string>} $
+ */
+/*const binding_list_func = ($) => {
+  return list_seq($._binding, ",")
+}*/
 
 /**
  * @param {GrammarSymbols<string>} $
@@ -134,13 +137,7 @@ export default grammar({
      * Basically, the input of everything.
      * chunk ::= block
      */
-    chunk: ($) =>
-      seq(
-        optional($.hash_bang_line),
-        $._block
-      ),
-
-    hash_bang_line: (_) => /#.*/,
+    chunk: ($) => $._block,
 
     // block ::= {stat [';']} [laststat [';']]
     _block: ($) =>
@@ -233,9 +230,11 @@ export default grammar({
       // '(' exp ')'
       parenthesized_expression: ($) => seq("(", $.expression, ")"),
 
-      // var ::=  Name | prefixexp [ exp ] | prefixexp . Name
+      // var ::= NAME | prefixexp '[' exp ']' | prefixexp '.' NAME
       expr_variable: ($) =>
-        choice($._contextual_keyword, $.identifier, $.bracket_index_expression, $.dot_index_expression),
+        choice(
+          $._contextual_keyword, $.identifier, $.bracket_index_expression, $.dot_index_expression
+        ),
     },
 
     ...{
@@ -547,7 +546,7 @@ export default grammar({
             field("operator", "="),
             field("value", $.expression)
           ),
-          seq(field("name", choice($._contextual_keyword, $.identifier)), "=", field("value", $.expression)),
+          seq(field("name", $.identifier), "=", field("value", $.expression)),
           field("value", $.expression)
         ),
       // fieldsep ::= ',' | ';'
@@ -567,8 +566,6 @@ export default grammar({
         $.function_call,
         //$.stat_break, // in last_stat
         //$.stat_continue, // in last_stat
-        //$.label_statement,
-        //$.goto_statement,
         $.stat_do,
         $.stat_while,
         $.stat_repeat,
@@ -623,11 +620,6 @@ export default grammar({
       // Loop stuff
       stat_break: (_) => "break",
       stat_continue: (_) => "continue",
-
-      // label ::= '::' Name '::'
-      //label_statement: ($) => seq('::', $.identifier, '::'),
-      // goto Name
-      //goto_statement: ($) => seq('goto', $.identifier),
       
       // 'do' block 'end'
       stat_do: ($) => {
@@ -765,11 +757,6 @@ export default grammar({
       // Aliases are there because they help with hidden node tree rules
 
 
-      // Remove the global stuff below?
-      //
-      // global function Name funcbody
-      // global attnamelist [‘=’ explist]
-      // global [attrib] ‘*’
       // Helper
       declaration: ($) =>
         choice(
@@ -785,34 +772,7 @@ export default grammar({
           field(
             "const_declaration", alias($._const_var_declaration, $.variable_declaration)
           ),
-
-          field(
-            "global_declaration",
-            alias($._global_function_declaration, $.function_declaration)
-          ),
-          field(
-            "global_declaration",
-            alias($._global_variable_declaration, $.variable_declaration)
-          ),
-          field(
-            "global_declaration",
-            alias($._global_implicit_variable_declaration, $.implicit_variable_declaration)
-          )
         ),
-
-
-      // global attnamelist [‘=’ explist]
-      _global_variable_declaration: ($) =>
-        seq(
-          'global',
-          choice(
-            alias($._att_name_list, $.variable_list),
-            alias($._variable_assignment, $.stat_assignment),
-          )
-        ),
-      // global function Name funcbody
-      _global_function_declaration: ($) =>
-        seq('global', 'function', field('name', $.identifier), $._function_body),
 
       // funcname ::= NAME {'.' NAME} [':' NAME]
       _function_name: ($) =>
@@ -841,44 +801,25 @@ export default grammar({
           field('method', $.identifier)
         ),
 
-      // attnamelist ‘=’ explist
-      _variable_assignment: ($) =>
-        seq(
-          alias($._att_name_list, $.variable_list),
-          field('operator', '='),
-          alias($._variable_assignment_explist, $.expression_list)
-        ),
-
+      
       // attnamelist ::= [attrib] Name [attrib] {‘,’ Name [attrib]}
-      /*_att_name_list: ($) =>
-        seq(
-          optional(field('attribute', alias($._attrib, $.attribute))),
-          list_seq(
-            seq(
-              field('name', $.identifier),
-              optional(field('attribute', alias($._attrib, $.attribute)))
-            ),
-            ','
-          ),
-        ),*/
-      _att_name_list: $ => list_seq(
+      /*_att_name_list: $ => list_seq(
         seq(
           field('name', $.identifier),
           optional(seq(':', $.type)),
           optional(field('attribute', alias($._attrib, $.attribute))),
         ),
         ',',
-      ),
-
-      // global [attrib] '*'
-      _global_implicit_variable_declaration: ($) =>
+      ),*/
+      
+      // attnamelist ‘=’ explist
+      _variable_assignment: ($) =>
         seq(
-          "global",
-          optional(field("attribute", alias($._attrib, $.attribute))),
-          "*"
+          //alias($._att_name_list, $.variable_list),
+          alias($._binding_list, $.variable_list),
+          field('operator', '='),
+          alias($._variable_assignment_explist, $.expression_list)
         ),
-      // attrib ::= '<' Name '>'
-      _attrib: ($) => seq("<", $.identifier, ">"),
 
 
 
@@ -900,10 +841,10 @@ export default grammar({
         
         stat_classDef: ($) => {
           return seq(
-            seq(
+            //seq(
               //optional("open"), // This is not confirmed yet
               "class",
-            ),
+            //),
             $.identifier,
             optional(
               seq(
@@ -1241,11 +1182,16 @@ export default grammar({
 
 
 
-    // only `global` for now
-    _contextual_keyword: (_) => prec(1, "global"),
+    // Prevents keywords from being just keywords
+    _contextual_keyword: (_) => prec(1,
+      choice(
+        "class",
+        "public"
+      )
+    ),
     
-    // Name
-    // also contains @ and ? due to attributes
+    // Name Identifier
+    // also contains `, @ and ?
     identifier: (_) => {
       const identifier_start =
         // @ts-ignore
