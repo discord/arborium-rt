@@ -98,11 +98,19 @@
     "end"
   ] @keyword.function)
 
+
+; Classes
 (stat_classDef
   [
     "class"
     "end"
   ] @keyword)
+
+(class_field
+  [
+    "public"
+  ] @keyword)
+
 
 
 ; Operators
@@ -162,9 +170,6 @@
 (type_definition_stat
   name: (identifier) @type.definition)
 
-; Constants
-;((identifier) @constant
-;  (#lua-match? @constant "^[A-Z][A-Z_0-9]+$"))
 
 ; Builtins
 ((identifier) @constant.builtin
