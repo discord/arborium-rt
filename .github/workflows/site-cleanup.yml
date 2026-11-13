@@ -1,0 +1,51 @@
+name: Playground preview cleanup
+
+# Deletes the PR's `pr-<n>` preview of the playground Worker once the PR is
+# closed or merged. Previews come from build.yml's `deploy-site` (same-repo
+# PRs) and site-preview-fork.yml (approved fork PRs). See site/wrangler.jsonc.
+#
+# `pull_request_target`, not `pull_request`: a fork's `pull_request` run gets
+# no secrets, so it couldn't delete an approved fork preview. A
+# pull_request_target run has this repo's secrets and runs the default
+# branch's copy of this file, so it must never check out or run the PR's
+# code. It only reads the default branch's wrangler.jsonc and the PR number.
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  delete-preview:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_SEND_METRICS: "false"
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      # The base branch (pull_request_target's default ref), not the PR head.
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: site/wrangler.jsonc
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # Exits 0 without credentials, matching the deploy jobs. Most fork PRs
+      # never get an approved preview, and a PR can close before its first
+      # deploy, so a failed delete is a warning rather than a failure.
+      - name: Delete preview
+        working-directory: site
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice::Cloudflare credentials not set; nothing to clean up."
+            exit 0
+          fi
+          npx --yes wrangler@4.160.0 preview delete --name "pr-$PR" --skip-confirmation \
+            || echo "::warning::wrangler preview delete failed (maybe no preview was ever created)."

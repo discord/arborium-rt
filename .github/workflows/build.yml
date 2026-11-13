@@ -672,3 +672,148 @@ jobs:
           path: ${{ steps.pack.outputs.tarball }}
           if-no-files-found: error
           retention-days: 14
+
+  # ── Playground site (site/) ───────────────────────────────────────────────
+  # Bundles the Vite playground against the exact `dist/` that was packed into
+  # the tarball above: the tarball's package/dist/ is extracted over the
+  # workspace copy of @discord/arborium-rt-wasm, which the site imports via
+  # `workspace:*`. No Rust, no emcc, no submodules.
+  #
+  # Only for pushes and PRs. When publish.yml calls this workflow
+  # (workflow_call, so event_name is the caller's `workflow_dispatch`), the
+  # site jobs are skipped so a playground failure can't block a release.
+  site:
+    needs: package-wasm
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Download tarball
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.package-wasm.outputs.tarball-artifact }}
+          path: tarball
+
+      - name: Extract package dist/ into the workspace
+        run: |
+          tar -xzf "tarball/${{ needs.package-wasm.outputs.tarball-name }}" -C tarball
+          rm -rf packages/arborium-rt-wasm/dist
+          mv tarball/package/dist packages/arborium-rt-wasm/dist
+
+      - name: Bundle playground
+        run: pnpm --filter @discord/arborium-rt-site bundle
+
+      - name: Upload playground bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: playground-site
+          path: site/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Deploys the bundle to the `arborium-rt-playground` Cloudflare Worker
+  # (static assets only; config in site/wrangler.jsonc).
+  #   - push to main → `wrangler deploy` (production).
+  #   - PR from a branch in this repo → `wrangler preview --name pr-<n>`, a
+  #     separate preview URL per PR (refreshed on every push), linked from a
+  #     single PR comment that gets edited in place. site-cleanup.yml deletes
+  #     it when the PR closes.
+  # Fork PRs are skipped here: their runs get no secrets. Their `site`
+  # artifact is deployed by site-preview-fork.yml once a maintainer approves
+  # it through the `fork-preview` environment.
+  #
+  # Needs repo secrets CLOUDFLARE_API_TOKEN (Workers Scripts: Edit) and
+  # CLOUDFLARE_ACCOUNT_ID. Until both are set, this job logs a notice and
+  # succeeds without deploying.
+  deploy-site:
+    needs: site
+    if: >-
+      ${{
+        (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository)
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_SEND_METRICS: "false"
+      # Pinned: `wrangler preview` is an open beta, so its flags and JSON
+      # output may change between releases.
+      WRANGLER: npx --yes wrangler@4.160.0
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - name: Check for Cloudflare credentials
+        id: creds
+        working-directory: .
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set; skipping playground deploy."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Only wrangler.jsonc is needed; the assets come from the artifact.
+      - uses: actions/checkout@v6
+        if: ${{ steps.creds.outputs.ok == 'true' }}
+        with:
+          sparse-checkout: site/wrangler.jsonc
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v6
+        if: ${{ steps.creds.outputs.ok == 'true' }}
+        with:
+          node-version: 24
+
+      - name: Download playground bundle
+        if: ${{ steps.creds.outputs.ok == 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: playground-site
+          path: site/dist
+
+      - name: Deploy to production
+        if: ${{ steps.creds.outputs.ok == 'true' && github.event_name == 'push' }}
+        run: |
+          $WRANGLER deploy
+          echo "Deployed the playground to production." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy PR preview
+        id: preview
+        if: ${{ steps.creds.outputs.ok == 'true' && github.event_name == 'pull_request' }}
+        run: |
+          set -o pipefail
+          output="$($WRANGLER preview --name "pr-${{ github.event.pull_request.number }}" \
+            --message "${{ github.event.pull_request.head.sha }}" --json)"
+          printf '%s\n' "$output"
+          url="$(printf '%s' "$output" | jq -er '.preview.urls[0]')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Playground preview: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment preview URL on the PR
+        if: ${{ steps.preview.outputs.url }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          URL: ${{ steps.preview.outputs.url }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --edit-last --create-if-none \
+            --body "**Playground preview:** $URL (built from $SHA)"

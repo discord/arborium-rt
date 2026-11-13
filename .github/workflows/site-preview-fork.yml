@@ -1,0 +1,156 @@
+name: Playground preview (fork PRs)
+
+# Deploys a fork PR's playground preview after a maintainer approves it.
+#
+# A fork's own Build run can't deploy: GitHub gives `pull_request` runs from
+# forks no secrets (environment secrets included) and a read-only token, even
+# once the run is approved. So the fork's Build only bundles the site and
+# uploads `playground-site`, and this workflow picks the artifact up. A
+# `workflow_run` workflow runs in this repo's context with its secrets, and
+# GitHub always takes its definition from the default branch, so a fork can't
+# change it. (It also can't be tested from a PR: it only fires once it's on
+# main.)
+#
+# The deploy job uses the `fork-preview` environment, which must have required
+# reviewers. That is the approval gate: the job waits for a maintainer, who is
+# approving publishing that commit's bundle (which the fork fully controls,
+# HTML and JS included) on its pr-<n> preview hostname. Each Build run is one
+# commit, so every new push to the fork needs a new approval.
+#
+# Rules for editing this file:
+#   - Never check out, install, or run anything from the fork. The only thing
+#     taken from it is the static `dist/` artifact, which wrangler uploads as
+#     assets. wrangler.jsonc comes from the default branch.
+#   - Treat every workflow_run field the fork controls (head_branch, the run's
+#     display title, artifact contents) as untrusted: pass them through `env`,
+#     never `${{ }}` them into a script.
+#   - Don't take the PR number from the artifact: a fork could name another
+#     PR and overwrite its preview and comment. `resolve` looks it up from the
+#     event's head repo, branch and SHA instead.
+#
+# Same-repo PRs and main deploy from build.yml's `deploy-site` without
+# approval. site-cleanup.yml deletes previews when PRs close.
+
+on:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
+
+permissions: {}
+
+# A newer push to the same fork branch supersedes an older run that is still
+# waiting for approval.
+concurrency:
+  group: fork-preview-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  # No secrets and no approval here: find the open PR this run built, so the
+  # approval request only appears for runs that map to one.
+  resolve:
+    if: >-
+      ${{
+        github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name != github.repository
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      pr: ${{ steps.find.outputs.pr }}
+    steps:
+      - name: Find the PR for this run
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # The PR must still point at the commit this run built; if the fork
+          # has pushed since, that push's own run will deploy instead.
+          pr="$(gh api -X GET "repos/$REPO/pulls" \
+            -f state=open -f head="$HEAD_OWNER:$HEAD_BRANCH" \
+            --jq "[.[] | select(.head.sha == \"$HEAD_SHA\")][0].number // empty")"
+          if [ -z "$pr" ]; then
+            echo "::notice::No open PR has head $HEAD_OWNER:$HEAD_BRANCH at $HEAD_SHA; nothing to deploy."
+            exit 0
+          fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          echo "Fork PR #$pr at $HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: resolve
+    if: ${{ needs.resolve.outputs.pr }}
+    runs-on: ubuntu-latest
+    environment:
+      name: fork-preview
+      url: ${{ steps.preview.outputs.url }}
+    permissions:
+      actions: read # download the artifact from the Build run
+      contents: read
+      pull-requests: write
+    env:
+      PR: ${{ needs.resolve.outputs.pr }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_SEND_METRICS: "false"
+      # Same pin as build.yml's deploy-site.
+      WRANGLER: npx --yes wrangler@4.160.0
+    steps:
+      - name: Check for Cloudflare credentials
+        id: creds
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set; skipping playground deploy."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The default branch's wrangler.jsonc, not the fork's.
+      - uses: actions/checkout@v6
+        if: ${{ steps.creds.outputs.ok == 'true' }}
+        with:
+          sparse-checkout: site/wrangler.jsonc
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        if: ${{ steps.creds.outputs.ok == 'true' }}
+        with:
+          node-version: 24
+
+      - name: Download playground bundle from the fork's Build run
+        if: ${{ steps.creds.outputs.ok == 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: playground-site
+          path: site/dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Deploy PR preview
+        id: preview
+        if: ${{ steps.creds.outputs.ok == 'true' }}
+        working-directory: site
+        run: |
+          set -o pipefail
+          output="$($WRANGLER preview --name "pr-$PR" --message "fork $HEAD_SHA" --json)"
+          printf '%s\n' "$output"
+          url="$(printf '%s' "$output" | jq -er '.preview.urls[0]')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Playground preview: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment preview URL on the PR
+        if: ${{ steps.preview.outputs.url }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          URL: ${{ steps.preview.outputs.url }}
+        run: |
+          gh pr comment "$PR" --edit-last --create-if-none \
+            --body "**Playground preview:** $URL (built from $HEAD_SHA, approved for deploy)"
