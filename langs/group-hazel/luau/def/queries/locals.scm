@@ -7,7 +7,7 @@
   (stat_if)
   (stat_for)
   (function_declaration)
-  (function_definition)
+  (expr_function_definition)
   (stat_classDef)
 ] @local.scope
 
