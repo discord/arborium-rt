@@ -163,7 +163,12 @@ impl Registry {
         let grammar_id = entry.grammar_id;
         let inner_id = entry.inner_id;
         if let Some(grammar) = self.grammars.get_mut(&grammar_id) {
-            grammar.runtime.set_text(inner_id, text);
+            // Parse on the whole highlight pool: highlighting charges what
+            // this cost to the same pool before running any query, so the
+            // parse and every query after it share one budget.
+            grammar
+                .runtime
+                .set_text_with_fuel(inner_id, text, crate::highlight::HIGHLIGHT_FUEL);
         }
     }
 

@@ -149,18 +149,25 @@ modules expose `pub` items so the per-target shim crates can drive them:
   upstream but drops the async `GrammarProvider` because registry lookups
   are just `HashMap` hits. `MAX_INJECTION_DEPTH = 32` is a hard cap against
   pathological grammars. `HIGHLIGHT_FUEL` is the other hard cap: one
-  highlight call gets a fixed pool of **query fuel** (a model of
-  query-cursor work — see the patch notes below) that the primary parse and
-  every injected sub-parse spend from in document order. When it runs dry
+  highlight call gets a fixed pool of **fuel** (a model of tree-sitter's
+  parse and query work — see the patch notes below) that every parse and
+  query spends from in document order: the primary parse (which
+  `Registry::set_text` runs on the whole pool, and highlighting then
+  charges), the primary query, then each injected block's parse
+  (`set_text_with_fuel`) and query (`parse_with_fuel`). When it runs dry
   the walk stops descending and the affected language names come back in
-  `out_of_fuel_languages` alongside the total in `fuel_used`; spans
-  resolved so far are still returned. This bounds a whole document rather
-  than each query, so N injected chain-bomb code blocks cost the pool once,
-  not N times. Fuel replaced a 300 ms wall-clock deadline: the cutoff is now
-  deterministic (same document, same output, loaded CPU or not) but bounds
-  *work*, so sizing the pool for the slowest host that matters is a
-  deliberate calibration — `packages/arborium-rt-wasm/test/fuel.test.mts`
-  pins it. Both the themed-span and HTML outputs render from
+  `out_of_fuel_languages` alongside the total in `fuel_used` (of which
+  `parse_fuel_used` was parsing); spans resolved so far are still
+  returned. A parse that runs out leaves no tree, so for the primary grammar
+  that means empty spans with its language listed, not an error. This
+  bounds a whole document rather than each parse or query, so N injected
+  chain-bomb code blocks cost the pool once, not N times, and a large
+  document can't buy more parse time by being large. Fuel replaced a 300 ms
+  wall-clock deadline: the cutoff is now deterministic (same document, same
+  output, loaded CPU or not) but bounds *work*, so sizing the pool for the
+  slowest host that matters is a deliberate calibration —
+  `packages/arborium-rt-wasm/test/fuel.test.mts` and
+  `parse-budget.test.mts` pin it. Both the themed-span and HTML outputs render from
   the same resolved span set (`dedup_and_tag` + `coalesce_by_tag`); HTML
   goes through this module's own `tagged_spans_to_html` rather than
   `arborium_highlight::spans_to_html`, because the upstream renderer dedups
@@ -374,11 +381,23 @@ Two pinned submodules live under `third_party/`:
       fuel: the `QueryCursor` progress callback charges each 100-operation
       tick `FUEL_PER_OPERATION + FUEL_PER_LIVE_STATE × live states` and
       breaks when the caller's allotment is spent
-      (`parse_with_fuel` / `parse_utf16_with_fuel`). Unpublished upstream.
-    - `arborium-tree-sitter` — **patched** three times: to skip static
+      (`parse_with_fuel` / `parse_utf16_with_fuel`); and to meter the
+      tree-sitter parse in the same fuel: on every tick the parser's
+      progress callback prices the parse so far as
+      `PARSE_FUEL_PER_OPERATION × operations + PARSE_FUEL_PER_REDUCTION_SCAN
+      × reduction scans + PARSE_FUEL_PER_POPPED_SUBTREE × popped subtrees +
+      PARSE_FUEL_PER_LEXED_CHAR × lexed characters +
+      PARSE_FUEL_PER_SUMMARIZED_CHILD × summarized children`
+      (`parse_fuel_cost`) and breaks when the caller's allotment
+      (`set_text_with_fuel`) is spent. A session whose parse ran out queries
+      as empty + `out_of_fuel` rather than erroring. Unpublished upstream.
+    - `arborium-tree-sitter` — **patched** four times: to skip static
       tree-sitter C linking on emscripten (the MAIN_MODULE resolves those
       symbols), to publish the cursor's in-progress match count on
-      `TSQueryCursorState` so the fuel meter can weight by it, and to add a
+      `TSQueryCursorState` so the fuel meter can weight by it, to publish
+      the parser's error-recovery and lexing work (`reduction_scan_count`,
+      `popped_subtree_count`, `lexed_char_count`, `summarized_child_count`)
+      on `TSParseState` for the same reason, and to add a
       `regex-lite` feature (enabled by the root `Cargo.toml`) that compiles
       `#match?` predicates with regex-lite instead of regex. The regex crate's
       automata, literal optimizations and Unicode tables were ~80% of the
@@ -451,7 +470,12 @@ execution now stops when the caller's fuel allotment is spent, returning
 partial spans. That is the DoS guard against quadratic highlight queries
 (kotlin/swift/javascript chained member access), so it is load-bearing, not
 cosmetic; see `patches/arborium/0004`'s commit message for the cost model
-and the measurements behind its constants.
+and the measurements behind its constants. `patches/arborium/0006`–`0008`
+do the same for the parse (error recovery on inputs like repeated kotlin
+`-}` is superlinear): a parse stops when its allotment, in the same fuel,
+is spent. See `0008`'s commit message for the parse cost model, its
+calibration, and what it doesn't cover. Changing `TSParseState` or `TSQueryCursorState` changes the
+host's C, so rebuild the host (`build wasm host`) along with the runtime.
 
 `./scripts/arborium-rt bootstrap` is **idempotent**: it resets each
 submodule to its pinned SHA, `git apply`s every patch under
