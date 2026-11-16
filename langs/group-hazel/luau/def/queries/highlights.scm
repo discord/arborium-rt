@@ -167,9 +167,12 @@
 (builtin_type) @type.builtin
 
 
-; Typedefs
 (type_definition_stat
   name: (identifier) @type.definition)
+
+(generic_type_list_with_defaults
+  (identifier) @type)
+
 
 
 ; Builtins
@@ -229,6 +232,11 @@
   method: (identifier) @function.method.call)
 
 (function_call
+  name:
+    (expr_type_instantiate (identifier) @function.call))
+
+
+(function_call
   (identifier) @function.builtin
   ; format-ignore
   (#any-of? @function.builtin
@@ -270,7 +278,7 @@
 ] @punctuation.bracket
 
 
-(genericTypeList_angle_wrapper
+(genericTypeList_wrapper
   [
     "<"
     ">"
@@ -281,6 +289,13 @@
     "<"
     ">"
   ] @punctuation.bracket)
+
+(type_instantiation
+  [
+    "<"
+    ">"
+  ] @punctuation.bracket)
+
 
 ; Comments
 (comment) @comment @spell
