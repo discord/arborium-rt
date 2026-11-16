@@ -1,5 +1,5 @@
-repo: https://github.com/tree-sitter-grammars/tree-sitter-luau
-commit: a8914d6c1fc5131f8e1c13f769fa704c9f5eb02f
+repo: https://github.com/karl-police/tree-sitter-luau-new
+commit: 912dc89c993410bbb373a4269a6ef565755a7b4c
 license: MIT
 
 grammars:
@@ -10,6 +10,3 @@ grammars:
     has_scanner: true
 
     description: "Luau Grammar"
-
-    dependencies:
-      - npm: "tree-sitter-lua"
