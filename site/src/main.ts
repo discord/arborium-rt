@@ -154,6 +154,7 @@ interface Outcome {
 	missingInjections: string[];
 	outOfFuelLanguages: string[];
 	fuelUsed: number;
+	parseFuelUsed: number;
 	highlightMs: number;
 	totalMs: number;
 	loaded: string[];
@@ -319,6 +320,7 @@ function render(text: string, out: Outcome): void {
 			? ["spans", String(out.spans.length)]
 			: ["html", `${out.html.length} chars`],
 		["fuel", out.fuelUsed.toLocaleString()],
+		["of which parsing", out.parseFuelUsed.toLocaleString()],
 		[
 			"out of fuel",
 			out.outOfFuelLanguages.join(", ") || "—",

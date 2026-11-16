@@ -1,0 +1,457 @@
+From 7cc9f762f3b7606c443b9c228c2c6f64582ceaf5 Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Mon, 16 Nov 2026 13:51:02 -0800
+Subject: [PATCH 2/2] plugin-runtime: meter parse work in query fuel
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Patch 0006 bounded the tree-sitter parse that set_text runs, but in
+parser operations, at 10 per byte of each call's own input (at least
+10,000), with no way for the caller to size or see the budget. That has
+three problems:
+
+- It's a separate currency from query fuel, so a caller can't bound a
+  document's total work with one pool.
+- It's per call, so a document holding N injected blocks gets N budgets,
+  and the same bytes re-parsed at every level of an injection chain each
+  get their own allotment too.
+- It scales with input length, so a large document buys proportionally
+  more parse time — and operations aren't uniformly priced: one taken in
+  error recovery costs 5–10× an ordinary one.
+
+Meter the parse in the same fuel queries burn, with a caller-supplied
+allotment:
+
+- set_text_with_fuel(session_id, text, fuel) -> FuelSpent parses on an
+  explicit allotment and reports what the parse cost and whether it was
+  cut off. On every tick of the parse progress callback (every 100
+  operations) it prices the parse so far with parse_fuel_cost():
+
+      PARSE_FUEL_PER_OPERATION        (16) × parser operations
+    + PARSE_FUEL_PER_REDUCTION_SCAN   (15) × reduction_scan_count
+    + PARSE_FUEL_PER_POPPED_SUBTREE   (47) × popped_subtree_count
+    + PARSE_FUEL_PER_LEXED_CHAR       (10) × lexed_char_count
+    + PARSE_FUEL_PER_SUMMARIZED_CHILD  (2) × summarized_child_count
+
+  using the counters the previous patch publishes on TSParseState, and
+  halts the parser once the allotment is spent. Because the result is in
+  query-fuel units, a caller can thread one pool through every parse and
+  every query (pool -= spent.used).
+- set_text runs on DEFAULT_PARSE_FUEL (80e6, the same figure as
+  DEFAULT_QUERY_FUEL). PARSE_OPERATIONS_PER_BYTE and MIN_PARSE_OPERATIONS
+  are removed. apply_edit's incremental re-parse goes through the same
+  metered path instead of running unbounded.
+- The session records its last parse's cost; parse_fuel(session_id)
+  reads it, so a caller that parsed at set_text time can charge it to a
+  pool later.
+- A parse that ran out still leaves no tree, and the parser is still
+  reset so the next parse starts fresh. parse_with_fuel /
+  parse_utf16_with_fuel now report that session as out of fuel with an
+  empty result, rather than as a "no text set" error, so a starved parse
+  surfaces through the same out_of_fuel signal as a starved query.
+  Sessions that were never given text still error.
+
+Calibration. Each input below was parsed natively to count operations,
+reduction scans, popped subtrees, lexed characters and summarized
+children (the counts are deterministic: fuel computed from the native
+counts matches the wasm runtime's exactly), then timed in the browser
+runtime (V8, the emscripten host built with emsdk 5.0.6) with the pool
+lifted, so the attacks ran to completion. The set is ordinary source,
+broken and wrong-language source, the recovery attacks, and lexer-heavy
+input (long strings, comments, identifiers and whitespace runs,
+unterminated strings and templates, long Markdown paragraphs and code
+fences). A non-negative least-squares fit of wasm time on the five
+counts, weighted by relative error, gives ~39 ns per operation, ~39 ns
+per reduction scan, ~118 ns per popped subtree, ~24 ns per lexed
+character and ~5.5 ns per summarized child. Query fuel costs ~2.5 ns per
+unit on the same runtime for large ordinary files (0.5–3.2 across the
+inputs), so dividing by 2.5 gives the constants above.
+
+  input                           ms   parse fuel   ns/fuel
+  TypeScript, 808 KB            63.7      28.0e6      2.28
+  Markdown (CLAUDE.md), 38 KB    8.1       3.1e6      2.57
+  Kotlin, ordinary, 24 KB        7.6       2.7e6      2.80
+  Kotlin `a.b()` chain, 16 KB   13.7       5.4e6      2.54
+  TypeScript, every 37th char
+    dropped, 79 KB              23.6       8.5e6      2.78
+  Kotlin, every 23rd dropped    24.2       7.0e6      3.43
+  Rust parsed as TypeScript     15.1       5.2e6      2.94
+  Markdown parsed as JS         10.6       4.7e6      2.24
+  Markdown, 200 KB code fence  133.2      53.9e6      2.47
+  Markdown, 200 KB paragraph    43.1      16.1e6      2.68
+  TS, 5,000 unterminated
+    string lines                56.8      30.3e6      1.87
+  JS, unterminated 50 KB
+    template literal          1991.9     734.6e6      2.71
+  Kotlin `-}` × 500, 1 KB      181.7      80.0e6      2.27
+  Kotlin `-}` × 2000, 4 KB    2695.8    1250.1e6      2.16
+
+Every input of a millisecond or more that ticks at least once lands at
+1.87–3.98 ns per fuel, within 0.73–1.57× of the model. Without the
+summarized-children term the template literal is priced at ~1/7 of its
+time and the spread is ~9.6×; without the lexed-character term the rest
+fit about as well, the term mostly moving cost from operations onto
+characters. Charging operations alone leaves ~8× between ordinary source
+and recovery-heavy input.
+
+With HIGHLIGHT_FUEL at 110e6, the two parse attacks above are cut off at
+~250 ms (`-}`) and ~290 ms (the template literal).
+
+Not covered: a document that parses in fewer than 100 operations never
+ticks, so nothing is charged; a single 200 KB string, comment or
+whitespace run is one such, at 1–5 ms, linear in its length.
+---
+ crates/arborium-plugin-runtime/src/lib.rs | 255 +++++++++++++++++-----
+ crates/arborium-wire/src/lib.rs           |   8 +-
+ 2 files changed, 210 insertions(+), 53 deletions(-)
+
+diff --git a/crates/arborium-plugin-runtime/src/lib.rs b/crates/arborium-plugin-runtime/src/lib.rs
+index b67283f..be1bc08 100644
+--- a/crates/arborium-plugin-runtime/src/lib.rs
++++ b/crates/arborium-plugin-runtime/src/lib.rs
+@@ -195,6 +195,10 @@ struct Session {
+     text: String,
+     cursor: QueryCursor,
+     cancelled: AtomicBool,
++    /// What the last parse of `text` cost. When it ran out of fuel, `tree`
++    /// is `None` and queries report the session as out of fuel rather than
++    /// failing.
++    parse_fuel: FuelSpent,
+ }
+ 
+ impl Session {
+@@ -209,8 +213,57 @@ impl Session {
+             text: String::new(),
+             cursor: QueryCursor::new(),
+             cancelled: AtomicBool::new(false),
++            parse_fuel: NO_FUEL_SPENT,
+         }
+     }
++
++    /// Parse `self.text` — incrementally against the current tree, when
++    /// `incremental` is set and there is one — spending at most `fuel`, and
++    /// record the cost in `parse_fuel`.
++    ///
++    /// On every tick the progress callback re-prices the parse so far with
++    /// [`parse_fuel_cost`] and halts the parser once the allotment is spent.
++    /// A halted parse leaves the session with no tree. Work after the last
++    /// tick (at most [`PARSE_OPS_PER_TICK`] operations) isn't charged.
++    fn reparse(&mut self, incremental: bool, fuel: u32) -> FuelSpent {
++        let old_tree = self.tree.take().filter(|_| incremental);
++        let spent = Cell::new(0u32);
++        let mut ticks = 0u32;
++        let mut burn_fuel = |state: &ParseState| -> ControlFlow<()> {
++            // The parser's work counters are cumulative for the parse, so
++            // price the whole parse afresh rather than adding up deltas.
++            ticks = ticks.saturating_add(1);
++            let used = parse_fuel_cost(
++                ticks,
++                state.reduction_scan_count(),
++                state.popped_subtree_count(),
++                state.lexed_char_count(),
++                state.summarized_child_count(),
++            );
++            spent.set(used);
++            if used >= fuel {
++                ControlFlow::Break(())
++            } else {
++                ControlFlow::Continue(())
++            }
++        };
++        let source = self.text.as_bytes();
++        self.tree = self.parser.parse_with_options(
++            &mut |i, _| source.get(i..).unwrap_or_default(),
++            old_tree.as_ref(),
++            Some(ParseOptions::new().progress_callback(&mut burn_fuel)),
++        );
++        let out_of_fuel = self.tree.is_none();
++        if out_of_fuel {
++            // Otherwise tree-sitter resumes the abandoned parse on the next call.
++            self.parser.reset();
++        }
++        self.parse_fuel = FuelSpent {
++            used: spent.get(),
++            out_of_fuel,
++        };
++        self.parse_fuel
++    }
+ }
+ 
+ // Internal structs to hold raw byte offsets during parsing
+@@ -277,38 +330,127 @@ pub const FUEL_PER_LIVE_STATE: u32 = 1;
+ ///
+ /// Sized so that legitimate source files finish comfortably while the
+ /// quadratic-query blowup below is cut off — see
+-/// `arborium_rt::highlight::HIGHLIGHT_FUEL`, which uses the same figure for
+-/// a whole document. Callers running a multi-grammar pipeline (a primary
++/// `arborium_rt::highlight::HIGHLIGHT_FUEL`, the pool for a whole document's
++/// parses and queries. Callers running a multi-grammar pipeline (a primary
+ /// parse plus injections) should allot one shared pool across the document
+ /// via [`PluginRuntime::parse_with_fuel`] rather than taking this default
+ /// per call, so total cost is bounded no matter how many injected blocks
+ /// the document contains.
+ pub const DEFAULT_QUERY_FUEL: u32 = 80_000_000;
+ 
+-/// Parser operations [`PluginRuntime::set_text`] may spend per byte of input
+-/// before the parse is abandoned. Query fuel only meters queries, so without
+-/// this the parse itself has no upper bound.
++/// Parser operations that run between two ticks of the parse progress
++/// callback.
+ ///
+-/// Scaling with input length keeps large ordinary documents whole while still
+-/// cutting off parses that grow faster than the input. Measured costs: typical
+-/// source is ~0.5–1.3 operations per byte and dense method chains ~7, while
+-/// superlinear parses pass 10 within a few hundred bytes and keep climbing.
+-pub const PARSE_OPERATIONS_PER_BYTE: u64 = 10;
++/// tree-sitter consults the callback once every
++/// `OP_COUNT_PER_PARSER_CALLBACK_CHECK` (= 100) parser operations
++/// (`parser.c`), so that is the granularity at which a parse can be metered
++/// and stopped.
++pub const PARSE_OPS_PER_TICK: u32 = 100;
+ 
+-/// Lower bound on the parse budget, so very short inputs aren't held to a
+-/// handful of operations.
+-pub const MIN_PARSE_OPERATIONS: u64 = 10_000;
++/// Fuel charged for one parser operation.
++///
++/// Parsing is metered in the same fuel as queries, so one allotment can
++/// cover both — see [`parse_fuel_cost`]. The five `PARSE_FUEL_PER_*`
++/// constants are a cost model of tree-sitter's parser: operations (the
++/// steps the progress callback counts) plus the kinds of work an operation
++/// can hide. One operation on ordinary source costs about the same as any
++/// other, but while recovering, one operation can search every reduction
++/// possible in a state (`PARSE_FUEL_PER_REDUCTION_SCAN`) and pop subtrees
++/// along many paths through the stack (`PARSE_FUEL_PER_POPPED_SUBTREE`),
++/// costing 5–10× as much. Charging operations alone would let an input that
++/// keeps the parser recovering run for ~8× longer per unit of fuel than
++/// ordinary source does. Recovery can also keep growing one ERROR node,
++/// rebuilding it from all of its children for every token it skips, which
++/// is quadratic while the operation count stays linear
++/// (`PARSE_FUEL_PER_SUMMARIZED_CHILD`). And one operation lexes one token,
++/// however long it is, while error recovery re-lexes text, so characters
++/// lexed are charged separately (`PARSE_FUEL_PER_LEXED_CHAR`).
++///
++/// The constants were fitted by timing parses in the browser runtime and
++/// are in query-fuel units, i.e. scaled so that a unit of fuel costs about
++/// the same time whether a parse or a query spends it. Under the fit,
++/// milliseconds-per-fuel stays within ~2× across ordinary source, broken
++/// and wrong-language source, long tokens and comments, and the superlinear
++/// recovery inputs this guards against.
++pub const PARSE_FUEL_PER_OPERATION: u32 = 16;
++
++/// Fuel charged per parse-table entry the parser looks up while searching
++/// for every reduction possible in a state. See
++/// [`PARSE_FUEL_PER_OPERATION`].
++pub const PARSE_FUEL_PER_REDUCTION_SCAN: u32 = 15;
++
++/// Fuel charged per subtree a reduction pops off the parse stack, summed
++/// over every stack path it follows. See [`PARSE_FUEL_PER_OPERATION`].
++pub const PARSE_FUEL_PER_POPPED_SUBTREE: u32 = 47;
++
++/// Fuel charged per character the lexer advances over, whether the
++/// generated lexer or an external scanner asked. See
++/// [`PARSE_FUEL_PER_OPERATION`].
++///
++/// The count is only read when the progress callback ticks, so the
++/// characters of a token lexed after the last tick, or of a document that
++/// parses in fewer than [`PARSE_OPS_PER_TICK`] operations, aren't charged.
++pub const PARSE_FUEL_PER_LEXED_CHAR: u32 = 10;
++
++/// Fuel charged per child of each node the parser builds, every one of
++/// which the node constructor walks to summarize. See
++/// [`PARSE_FUEL_PER_OPERATION`].
++///
++/// This is the term that catches error recovery growing one ERROR node:
++/// it rebuilds the node from all of its children for every token it skips,
++/// which is quadratic in the tokens skipped while the operation count stays
++/// linear.
++pub const PARSE_FUEL_PER_SUMMARIZED_CHILD: u32 = 2;
++
++/// Fuel allotted to a bare [`PluginRuntime::set_text`], i.e. one parse with
++/// no caller-supplied budget. The same figure as [`DEFAULT_QUERY_FUEL`]:
++/// both are measured in the same fuel.
++///
++/// Callers parsing and querying one document across several grammars (a
++/// primary parse plus injections) should thread one pool through every
++/// parse and query via [`PluginRuntime::set_text_with_fuel`] and
++/// [`PluginRuntime::parse_with_fuel`] instead, so the document as a whole
++/// is bounded.
++pub const DEFAULT_PARSE_FUEL: u32 = 80_000_000;
++
++/// Fuel a parse has cost after `ticks` progress-callback ticks, given the
++/// parser's cumulative work counters for the parse. Saturates at `u32::MAX`.
++///
++/// See [`PARSE_FUEL_PER_OPERATION`] for the cost model.
++#[must_use]
++pub fn parse_fuel_cost(
++    ticks: u32,
++    reduction_scans: u32,
++    popped_subtrees: u32,
++    lexed_chars: u32,
++    summarized_children: u32,
++) -> u32 {
++    let operations = u64::from(ticks) * u64::from(PARSE_OPS_PER_TICK);
++    let fuel = operations * u64::from(PARSE_FUEL_PER_OPERATION)
++        + u64::from(reduction_scans) * u64::from(PARSE_FUEL_PER_REDUCTION_SCAN)
++        + u64::from(popped_subtrees) * u64::from(PARSE_FUEL_PER_POPPED_SUBTREE)
++        + u64::from(lexed_chars) * u64::from(PARSE_FUEL_PER_LEXED_CHAR)
++        + u64::from(summarized_children) * u64::from(PARSE_FUEL_PER_SUMMARIZED_CHILD);
++    u32::try_from(fuel).unwrap_or(u32::MAX)
++}
+ 
+-/// What one query execution cost, and whether it finished.
++/// What one metered step — a parse or a query execution — cost, and
++/// whether it finished.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub struct FuelSpent {
+     /// Fuel consumed. May overshoot the allotment by up to one tick's
+-    /// worth, since the cursor is only interruptible at tick boundaries.
++    /// worth, since the parser and the cursor are only interruptible at tick
++    /// boundaries.
+     pub used: u32,
+-    /// True if the allotment ran out and the cursor was cut off mid-query.
++    /// True if the allotment ran out and the parse or query was cut off.
+     pub out_of_fuel: bool,
+ }
+ 
++const NO_FUEL_SPENT: FuelSpent = FuelSpent {
++    used: 0,
++    out_of_fuel: false,
++};
++
+ impl PluginRuntime {
+     /// Create a new plugin runtime with the given highlight configuration.
+     pub fn new(config: HighlightConfig) -> Self {
+@@ -336,35 +478,38 @@ impl PluginRuntime {
+ 
+     /// Set the full text content for a session.
+     ///
+-    /// This replaces any previous content and resets the parse tree. A parse
+-    /// that exceeds its budget (see [`PARSE_OPERATIONS_PER_BYTE`]) is
+-    /// abandoned, leaving the session with no tree.
++    /// This replaces any previous content and resets the parse tree.
++    ///
++    /// Runs on [`DEFAULT_PARSE_FUEL`]; use [`Self::set_text_with_fuel`] to
++    /// share one budget across several parses and queries.
+     pub fn set_text(&mut self, session_id: u32, text: &str) {
+-        if let Some(session) = self.sessions.get_mut(&session_id) {
+-            session.text = String::from(text);
+-            let budget = (text.len() as u64)
+-                .saturating_mul(PARSE_OPERATIONS_PER_BYTE)
+-                .max(MIN_PARSE_OPERATIONS);
+-            // tree-sitter calls the progress callback every 100 operations.
+-            let mut checks_left = budget / 100;
+-            let mut on_progress = |_: &ParseState| {
+-                if checks_left == 0 {
+-                    return ControlFlow::Break(());
+-                }
+-                checks_left -= 1;
+-                ControlFlow::Continue(())
+-            };
+-            session.tree = session.parser.parse_with_options(
+-                &mut |i, _| text.as_bytes().get(i..).unwrap_or_default(),
+-                None,
+-                Some(ParseOptions::new().progress_callback(&mut on_progress)),
+-            );
+-            if session.tree.is_none() {
+-                // Otherwise tree-sitter resumes the abandoned parse on the next call.
+-                session.parser.reset();
+-            }
+-            session.cancelled.store(false, Ordering::Relaxed);
+-        }
++        self.set_text_with_fuel(session_id, text, DEFAULT_PARSE_FUEL);
++    }
++
++    /// [`Self::set_text`], with an explicit fuel allotment.
++    ///
++    /// Returns what the parse cost and whether it was cut off. A parse that
++    /// runs out of fuel is abandoned, leaving the session with no tree;
++    /// [`Self::parse_with_fuel`] / [`Self::parse_utf16_with_fuel`] then
++    /// return an empty result flagged `out_of_fuel` instead of an error.
++    /// Parse fuel is the same fuel queries burn, so callers highlighting a
++    /// document made of several languages can thread one pool through every
++    /// parse and every query (`pool -= spent.used`) and bound the document's
++    /// work as a whole. Returns zero cost for an unknown session.
++    pub fn set_text_with_fuel(&mut self, session_id: u32, text: &str, fuel: u32) -> FuelSpent {
++        let Some(session) = self.sessions.get_mut(&session_id) else {
++            return NO_FUEL_SPENT;
++        };
++        session.text = String::from(text);
++        let spent = session.reparse(false, fuel);
++        session.cancelled.store(false, Ordering::Relaxed);
++        spent
++    }
++
++    /// What the session's last parse cost and whether it ran out of fuel, or
++    /// `None` for an unknown session.
++    pub fn parse_fuel(&self, session_id: u32) -> Option<FuelSpent> {
++        self.sessions.get(&session_id).map(|s| s.parse_fuel)
+     }
+ 
+     /// Apply an incremental edit to the session's text.
+@@ -395,7 +540,7 @@ impl PluginRuntime {
+             }
+ 
+             // Re-parse with the old tree for incremental parsing
+-            session.tree = session.parser.parse(&session.text, session.tree.as_ref());
++            session.reparse(true, DEFAULT_PARSE_FUEL);
+             session.cancelled.store(false, Ordering::Relaxed);
+         }
+     }
+@@ -418,11 +563,6 @@ impl PluginRuntime {
+         session_id: u32,
+         fuel: u32,
+     ) -> Result<(String, Vec<RawSpan>, Vec<RawInjection>, FuelSpent), ParseError> {
+-        const NO_FUEL_SPENT: FuelSpent = FuelSpent {
+-            used: 0,
+-            out_of_fuel: false,
+-        };
+-
+         let session = self
+             .sessions
+             .get_mut(&session_id)
+@@ -433,6 +573,21 @@ impl PluginRuntime {
+             return Ok((String::new(), Vec::new(), Vec::new(), NO_FUEL_SPENT));
+         }
+ 
++        // The parse ran out of fuel and left no tree: report it the way
++        // a cut-off query is reported — out of fuel, with whatever was
++        // collected, which here is nothing — rather than as an error.
++        if session.tree.is_none() && session.parse_fuel.out_of_fuel {
++            return Ok((
++                String::new(),
++                Vec::new(),
++                Vec::new(),
++                FuelSpent {
++                    used: 0,
++                    out_of_fuel: true,
++                },
++            ));
++        }
++
+         let tree = session
+             .tree
+             .as_ref()
+diff --git a/crates/arborium-wire/src/lib.rs b/crates/arborium-wire/src/lib.rs
+index ef0fee9..d5f8eb5 100644
+--- a/crates/arborium-wire/src/lib.rs
++++ b/crates/arborium-wire/src/lib.rs
+@@ -90,9 +90,11 @@ pub struct Utf8ParseResult {
+     pub fuel_used: u32,
+     /// True if the fuel the caller allotted ran out before the QueryCursor
+     /// finished. `spans` and `injections` then hold whatever was collected
+-    /// before fuel ran dry — partial output. The caller can use this to
+-    /// surface "highlighting was interrupted" in UI or telemetry, or to
+-    /// fall back to a different highlighter.
++    /// before fuel ran dry — partial output. Also true, with no spans or
++    /// injections, if the session's tree-sitter parse ran out of the fuel
++    /// it was given and left no tree to query. The caller can use this to surface
++    /// "highlighting was interrupted" in UI or telemetry, or to fall back
++    /// to a different highlighter.
+     pub out_of_fuel: bool,
+ }
+ 
+-- 
+2.50.1
+

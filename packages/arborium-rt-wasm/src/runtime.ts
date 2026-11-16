@@ -141,14 +141,16 @@ export interface HighlightSpansResult {
 	missingInjections: string[];
 	/**
 	 * Language names whose highlighting is incomplete because this call ran
-	 * out of *query fuel* — a fixed allowance of tree-sitter query-cursor
-	 * operations, enforced inside the QueryCursor's hot loop and shared by
-	 * the primary parse and every injected sub-parse. A language lands here
-	 * either because its own query was cut off mid-run, or because it sat in
-	 * an injected block reached after the pool was already drained and was
-	 * skipped. Empty when the whole document fit in budget; when non-empty,
-	 * `spans` holds whatever was resolved before the pool ran dry — partial
-	 * output.
+	 * out of *fuel* — a fixed allowance of tree-sitter work, enforced inside
+	 * the parser's and the QueryCursor's hot loops and shared by every parse
+	 * and query the call runs: the primary grammar's and every injected
+	 * block's. A language lands here because its query was cut off mid-run,
+	 * because its parse was abandoned (leaving nothing to highlight for it),
+	 * or because it sat in an injected block reached after the pool was
+	 * already drained and was skipped. Empty when the whole document fit in
+	 * budget; when non-empty, `spans` holds whatever was resolved before the
+	 * pool ran dry — partial output. If the primary grammar's own parse ran
+	 * out, that is no spans at all, with the primary language listed here.
 	 *
 	 * Fuel rather than elapsed time means the cutoff is deterministic: the
 	 * same document always highlights the same way, whether the CPU is idle
@@ -165,12 +167,19 @@ export interface HighlightSpansResult {
 	 */
 	outOfFuelLanguages: string[];
 	/**
-	 * Query fuel this call consumed, summed across the primary parse and
-	 * every injected sub-parse. Deterministic for a given document, so it
-	 * doubles as a cost metric: track the distribution to see how much
-	 * headroom real traffic leaves before the cap bites.
+	 * Fuel this call consumed, summed across every parse and query — the
+	 * primary grammar's (including its parse, run earlier by
+	 * {@link Session.setText}) and every injected block's. Deterministic for
+	 * a given document, so it doubles as a cost metric: track the
+	 * distribution to see how much headroom real traffic leaves before the
+	 * cap bites.
 	 */
 	fuelUsed: number;
+	/**
+	 * The part of {@link HighlightSpansResult.fuelUsed} spent parsing; the
+	 * rest went to queries.
+	 */
+	parseFuelUsed: number;
 }
 
 /** Result from {@link Session.highlightToHtml} including any missing injection grammars. */
@@ -186,6 +195,8 @@ export interface HighlightHtmlResult {
 	outOfFuelLanguages: string[];
 	/** See {@link HighlightSpansResult.fuelUsed}. */
 	fuelUsed: number;
+	/** See {@link HighlightSpansResult.parseFuelUsed}. */
+	parseFuelUsed: number;
 }
 
 /**
@@ -393,6 +404,7 @@ export class Session {
 						missing_injections: [],
 						out_of_fuel_languages: [],
 						fuel_used: 0,
+						parse_fuel_used: 0,
 					};
 				}
 				return JSON.parse(json) as ThemedHighlightResult;
@@ -404,6 +416,7 @@ export class Session {
 			missingInjections: result.missing_injections,
 			outOfFuelLanguages: result.out_of_fuel_languages,
 			fuelUsed: result.fuel_used,
+			parseFuelUsed: result.parse_fuel_used,
 		};
 	}
 
@@ -443,6 +456,7 @@ export class Session {
 							missing_injections: [],
 							out_of_fuel_languages: [],
 							fuel_used: 0,
+							parse_fuel_used: 0,
 						};
 					}
 					return JSON.parse(json) as HtmlHighlightResult;
@@ -454,6 +468,7 @@ export class Session {
 				missingInjections: result.missing_injections,
 				outOfFuelLanguages: result.out_of_fuel_languages,
 				fuelUsed: result.fuel_used,
+				parseFuelUsed: result.parse_fuel_used,
 			};
 		} finally {
 			if (prefixPtr) host._free(prefixPtr);

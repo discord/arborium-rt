@@ -50,7 +50,9 @@ export interface ParseResult {
 	fuelUsed: number;
 	/**
 	 * `true` if the fuel allotted to this parse ran out before the
-	 * QueryCursor finished. `spans` then holds partial output.
+	 * QueryCursor finished. `spans` then holds partial output. Also `true`,
+	 * with no spans, if the tree-sitter parse ran out of fuel and left no
+	 * tree to query.
 	 */
 	outOfFuel: boolean;
 }
@@ -77,16 +79,19 @@ export interface HighlightSpansResult {
 	missingInjections: string[];
 	/**
 	 * Language names whose highlighting is incomplete because the call ran
-	 * out of query fuel — a fixed allowance of tree-sitter query-cursor
-	 * operations shared by the primary parse and every injected sub-parse.
-	 * Empty when the whole document fit in budget. Sorted, deduplicated.
+	 * out of fuel — a fixed allowance of tree-sitter work shared by every
+	 * parse and query the call runs, the primary grammar's and every injected
+	 * block's. Empty when the whole document fit in budget. Sorted,
+	 * deduplicated.
 	 */
 	outOfFuelLanguages: string[];
 	/**
-	 * Query fuel this call consumed across every parse it ran. Deterministic
-	 * for a given document, so it doubles as a cost metric.
+	 * Fuel this call consumed across every parse and query it ran.
+	 * Deterministic for a given document, so it doubles as a cost metric.
 	 */
 	fuelUsed: number;
+	/** The part of `fuelUsed` spent parsing; the rest went to queries. */
+	parseFuelUsed: number;
 }
 
 /** Result from `highlightToHtml`, including any missing injection grammars. */
@@ -95,6 +100,7 @@ export interface HighlightHtmlResult {
 	missingInjections: string[];
 	outOfFuelLanguages: string[];
 	fuelUsed: number;
+	parseFuelUsed: number;
 }
 
 /**

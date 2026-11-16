@@ -11,7 +11,7 @@ runtime produces.
   and the document is highlighted again. Fence aliases such as `js`, `py`, and
   `sh` map to bundled grammars (the `ALIASES` table in `src/main.ts`). Names
   that still can't be resolved are listed in the stats bar.
-- **Stats**: highlight time, span count, `fuelUsed`, `outOfFuelLanguages`, and
+- **Stats**: highlight time, span count, `fuelUsed`, `parseFuelUsed`, `outOfFuelLanguages`, and
   which grammars are registered.
 - **Copy link**: puts the language and code in the URL hash so you can share a
   repro. The last session is also saved in `localStorage`.

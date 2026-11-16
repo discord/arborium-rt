@@ -1,0 +1,323 @@
+From 5cdb047bef1a1ed34e084b22d09141f01917c096 Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Mon, 16 Nov 2026 13:50:39 -0800
+Subject: [PATCH 1/2] tree-sitter: publish the parser's error-recovery work
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Teach arborium's vendored copy of the tree-sitter C runtime — the one
+this repo actually runs, compiled into the emscripten MAIN_MODULE host by
+`build wasm host` and statically into the Node addon by lib/node/build.rs
+— to publish how much work a parse is doing beyond the operations its
+progress callback counts, and expose it on the Rust binding.
+
+- include/tree_sitter/api.h, src/parser.c, src/lexer.{c,h}: add four
+  cumulative counters to TSParseState, after the existing fields so
+  readers of those stay layout-compatible:
+  - reduction_scan_count: parse-table entries looked up by
+    ts_parser__do_all_potential_reductions, which searches every
+    reduction possible in a state (each lookup scans a row of the sparse
+    table);
+  - popped_subtree_count: subtrees ts_parser__reduce pops off the stack,
+    summed over every stack path the reduction follows;
+  - lexed_char_count: characters the lexer advanced over. Counted in
+    ts_lexer__advance, which is the `advance` both the generated DFA
+    lexer and external scanners call, on a saturating counter in Lexer;
+    ts_parser__check_progress publishes it each time it consults the
+    progress callback. One operation lexes one token however long it is,
+    and error recovery re-lexes text, so this isn't bounded by either the
+    operation count or the input length. (ts_lexer__get_column re-walks
+    the line through ts_lexer__do_advance directly and isn't counted.)
+  - summarized_child_count: children of the nodes the parser builds,
+    each of which ts_subtree_summarize_children walks. Counted, on a
+    saturating counter in TSParser, at each place parser.c calls
+    ts_subtree_new_node / ts_subtree_new_error_node, from the size of the
+    children array it passes. (Summaries redone while balancing the
+    finished tree, in subtree.c, aren't counted; balancing already checks
+    progress per operation.)
+  All four are zeroed by ts_parser_reset, so they count from the start
+  of the current parse.
+- binding_rust/{bindings,lib}.rs: mirror the fields and expose them as
+  ParseState::reduction_scan_count() / popped_subtree_count() /
+  lexed_char_count() / summarized_child_count().
+
+Why: the progress callback fires once per 100 parser operations, but an
+operation's cost isn't fixed. In error recovery one operation can search
+every reduction in a state and pop subtrees along many merged paths
+through the stack. Profiling inputs that keep the parser recovering
+(kotlin on repeated `-}`, Rust pasted as TypeScript, Markdown parsed as
+JavaScript) put most of their time in exactly those two places, and
+parse time per operation runs 5–10× that of ordinary source. Worse,
+recovery can keep growing one ERROR node: skipped tokens are marked
+extra, so each skip pops every extra token above the last ERROR and
+rebuilds the ERROR from all of them. An unterminated 50 KB javascript
+template literal summarizes ~313e6 children that way over ~1e5
+operations. A meter that counts operations alone therefore under-charges
+recovery-heavy input by up to ~8×, and the rebuilding case by far more;
+weighting by these counters brings the spread to ~2×.
+arborium-plugin-runtime's parse fuel (next patch) weights by them.
+---
+ .../binding_rust/bindings.rs                  |  4 ++
+ .../arborium-tree-sitter/binding_rust/lib.rs  | 45 +++++++++++++++++++
+ .../include/tree_sitter/api.h                 | 29 ++++++++++++
+ crates/arborium-tree-sitter/src/lexer.c       |  1 +
+ crates/arborium-tree-sitter/src/lexer.h       |  4 ++
+ crates/arborium-tree-sitter/src/parser.c      | 24 ++++++++++
+ 6 files changed, 107 insertions(+)
+
+diff --git a/crates/arborium-tree-sitter/binding_rust/bindings.rs b/crates/arborium-tree-sitter/binding_rust/bindings.rs
+index bd6c498..1bffe07 100644
+--- a/crates/arborium-tree-sitter/binding_rust/bindings.rs
++++ b/crates/arborium-tree-sitter/binding_rust/bindings.rs
+@@ -83,6 +83,10 @@ pub struct TSParseState {
+     pub payload: *mut ::core::ffi::c_void,
+     pub current_byte_offset: u32,
+     pub has_error: bool,
++    pub reduction_scan_count: u32,
++    pub popped_subtree_count: u32,
++    pub lexed_char_count: u32,
++    pub summarized_child_count: u32,
+ }
+ #[repr(C)]
+ #[derive(Debug, Copy, Clone)]
+diff --git a/crates/arborium-tree-sitter/binding_rust/lib.rs b/crates/arborium-tree-sitter/binding_rust/lib.rs
+index 4665137..7f0e539 100644
+--- a/crates/arborium-tree-sitter/binding_rust/lib.rs
++++ b/crates/arborium-tree-sitter/binding_rust/lib.rs
+@@ -193,6 +193,51 @@ impl ParseState {
+     pub const fn has_error(&self) -> bool {
+         unsafe { self.0.as_ref() }.has_error
+     }
++
++    /// Parse-table entries looked up so far in this parse while searching
++    /// for every reduction possible in a state — work the operation count
++    /// behind the progress callback doesn't see. Grows mainly during error
++    /// recovery. Callers metering parse work, rather than wall-clock time,
++    /// should weight by it.
++    #[must_use]
++    pub const fn reduction_scan_count(&self) -> u32 {
++        unsafe { self.0.as_ref() }.reduction_scan_count
++    }
++
++    /// Subtrees popped off the stack by reductions so far in this parse,
++    /// summed over every stack path a reduction follows — work the
++    /// operation count behind the progress callback doesn't see. Grows
++    /// quickly when error recovery leaves many paths through the stack.
++    /// Callers metering parse work, rather than wall-clock time, should
++    /// weight by it.
++    #[must_use]
++    pub const fn popped_subtree_count(&self) -> u32 {
++        unsafe { self.0.as_ref() }.popped_subtree_count
++    }
++
++    /// Characters the lexer has advanced over so far in this parse, counting
++    /// every `advance` call from the generated lexer and from external
++    /// scanners — work the operation count behind the progress callback
++    /// doesn't see, since one operation lexes one token however long it is.
++    /// Error recovery re-lexes text, so this can exceed the input length.
++    /// Saturates at `u32::MAX`. Callers metering parse work, rather than
++    /// wall-clock time, should weight by it.
++    #[must_use]
++    pub const fn lexed_char_count(&self) -> u32 {
++        unsafe { self.0.as_ref() }.lexed_char_count
++    }
++
++    /// Children of the nodes the parser has built so far in this parse,
++    /// each of which the node constructor walks to summarize — work the
++    /// operation count behind the progress callback doesn't see. Error
++    /// recovery that keeps growing one ERROR node rebuilds it from all its
++    /// children for every token it skips, so this grows quadratically there.
++    /// Saturates at `u32::MAX`. Callers metering parse work, rather than
++    /// wall-clock time, should weight by it.
++    #[must_use]
++    pub const fn summarized_child_count(&self) -> u32 {
++        unsafe { self.0.as_ref() }.summarized_child_count
++    }
+ }
+ 
+ /// A stateful object that is passed into a [`QueryProgressCallback`]
+diff --git a/crates/arborium-tree-sitter/include/tree_sitter/api.h b/crates/arborium-tree-sitter/include/tree_sitter/api.h
+index af2601d..33ebc00 100644
+--- a/crates/arborium-tree-sitter/include/tree_sitter/api.h
++++ b/crates/arborium-tree-sitter/include/tree_sitter/api.h
+@@ -97,6 +97,35 @@ typedef struct TSParseState {
+   void *payload;
+   uint32_t current_byte_offset;
+   bool has_error;
++  /**
++   * Work the parser has done so far in this parse that the operation count
++   * behind the progress callback doesn't see. Both grow mainly during error
++   * recovery, where one operation can cost many times an ordinary one, so a
++   * caller metering parse work (rather than elapsed time) should weight by
++   * them.
++   *
++   * - `reduction_scan_count`: parse-table entries looked up while searching
++   *   for every reduction possible in a state (each lookup scans a table
++   *   row).
++   * - `popped_subtree_count`: subtrees popped off the stack by reductions,
++   *   summed over every stack path a reduction follows.
++   * - `lexed_char_count`: characters the lexer advanced over, counting
++   *   every `advance` call from the generated lexer and from external
++   *   scanners. One operation lexes one token, however long it is, and
++   *   error recovery re-lexes the same text, so this is not bounded by the
++   *   input length. Updated each time the progress callback is consulted.
++   *   Saturates at UINT32_MAX.
++   * - `summarized_child_count`: children of the nodes the parser has built,
++   *   each of which the node constructor walks to summarize. Error recovery
++   *   that keeps growing one ERROR node rebuilds it from all its children
++   *   for every token it skips, which is quadratic in the tokens skipped.
++   *   Updated each time the progress callback is consulted. Saturates at
++   *   UINT32_MAX.
++   */
++  uint32_t reduction_scan_count;
++  uint32_t popped_subtree_count;
++  uint32_t lexed_char_count;
++  uint32_t summarized_child_count;
+ } TSParseState;
+ 
+ typedef struct TSParseOptions {
+diff --git a/crates/arborium-tree-sitter/src/lexer.c b/crates/arborium-tree-sitter/src/lexer.c
+index 1709c41..932f4f2 100644
+--- a/crates/arborium-tree-sitter/src/lexer.c
++++ b/crates/arborium-tree-sitter/src/lexer.c
+@@ -254,6 +254,7 @@ static void ts_lexer__do_advance(Lexer *self, bool skip) {
+ static void ts_lexer__advance(TSLexer *_self, bool skip) {
+   Lexer *self = (Lexer *)_self;
+   if (!self->chunk) return;
++  if (self->advance_count < UINT32_MAX) self->advance_count++;
+ 
+   if (skip) {
+     LOG("skip", self->data.lookahead)
+diff --git a/crates/arborium-tree-sitter/src/lexer.h b/crates/arborium-tree-sitter/src/lexer.h
+index 7f451e3..61b2716 100644
+--- a/crates/arborium-tree-sitter/src/lexer.h
++++ b/crates/arborium-tree-sitter/src/lexer.h
+@@ -31,6 +31,10 @@ typedef struct {
+   uint32_t chunk_start;
+   uint32_t chunk_size;
+   uint32_t lookahead_size;
++  // Calls to `advance` (by the generated lexer or an external scanner) since
++  // the parser was last reset, saturating. Published on `TSParseState` as
++  // `lexed_char_count`.
++  uint32_t advance_count;
+   bool did_get_column;
+   ColumnData column_data;
+ 
+diff --git a/crates/arborium-tree-sitter/src/parser.c b/crates/arborium-tree-sitter/src/parser.c
+index bb24791..26d3667 100644
+--- a/crates/arborium-tree-sitter/src/parser.c
++++ b/crates/arborium-tree-sitter/src/parser.c
+@@ -111,8 +111,19 @@ struct TSParser {
+   bool has_scanner_error;
+   bool canceled_balancing;
+   bool has_error;
++  // Children of the nodes this parse has built, each of which
++  // ts_subtree_summarize_children walks. Saturating. Published on
++  // `TSParseState` as `summarized_child_count`.
++  uint32_t summarized_child_count;
+ };
+ 
++// Charge building a node from `child_count` children: the node constructors
++// summarize every child, so this is the work they do.
++static inline void ts_parser__count_summarized(TSParser *self, uint32_t child_count) {
++  uint32_t total = self->summarized_child_count + child_count;
++  self->summarized_child_count = total < child_count ? UINT32_MAX : total;
++}
++
+ typedef struct {
+   unsigned cost;
+   unsigned node_count;
+@@ -891,6 +902,7 @@ static bool ts_parser__select_children(
+   // not perform any allocation except for possibly growing the array to make
+   // room for its own heap data. The scratch tree is never explicitly released,
+   // so the same 'scratch trees' array can be reused again later.
++  ts_parser__count_summarized(self, self->scratch_trees.size);
+   MutableSubtree scratch_tree = ts_subtree_new_node(
+     ts_subtree_symbol(left),
+     &self->scratch_trees,
+@@ -950,6 +962,7 @@ static StackVersion ts_parser__reduce(
+   uint32_t halted_version_count = ts_stack_halted_version_count(self->stack);
+   for (uint32_t i = 0; i < pop.size; i++) {
+     StackSlice slice = *array_get(&pop, i);
++    self->parse_state.popped_subtree_count += slice.subtrees.size;
+     StackVersion slice_version = slice.version - removed_version_count;
+ 
+     // This is where new versions are added to the parse stack. The versions
+@@ -976,6 +989,7 @@ static StackVersion ts_parser__reduce(
+     SubtreeArray children = slice.subtrees;
+     ts_subtree_array_remove_trailing_extras(&children, &self->trailing_extras);
+ 
++    ts_parser__count_summarized(self, children.size);
+     MutableSubtree parent = ts_subtree_new_node(
+       symbol, &children, production_id, self->language
+     );
+@@ -1000,6 +1014,7 @@ static StackVersion ts_parser__reduce(
+         ts_subtree_array_clear(&self->tree_pool, &self->trailing_extras);
+         ts_subtree_release(&self->tree_pool, ts_subtree_from_mut(parent));
+         array_swap(&self->trailing_extras, &self->trailing_extras2);
++        ts_parser__count_summarized(self, next_slice_children.size);
+         parent = ts_subtree_new_node(
+           symbol, &next_slice_children, production_id, self->language
+         );
+@@ -1068,6 +1083,7 @@ static void ts_parser__accept(
+           ts_subtree_retain(children[k]);
+         }
+         array_splice(&trees, j, 1, child_count, children);
++        ts_parser__count_summarized(self, trees.size);
+         root = ts_subtree_from_mut(ts_subtree_new_node(
+           ts_subtree_symbol(tree),
+           &trees,
+@@ -1133,6 +1149,7 @@ static bool ts_parser__do_all_potential_reductions(
+       end_symbol = self->language->token_count;
+     }
+ 
++    self->parse_state.reduction_scan_count += end_symbol - first_symbol;
+     for (TSSymbol symbol = first_symbol; symbol < end_symbol; symbol++) {
+       TableEntry entry;
+       ts_language_table_entry(self->language, state, symbol, &entry);
+@@ -1230,6 +1247,7 @@ static bool ts_parser__recover_to_state(
+     ts_subtree_array_remove_trailing_extras(&slice.subtrees, &self->trailing_extras);
+ 
+     if (slice.subtrees.size > 0) {
++      ts_parser__count_summarized(self, slice.subtrees.size);
+       Subtree error = ts_subtree_new_error_node(&slice.subtrees, true, self->language);
+       ts_stack_push(self->stack, slice.version, error, false, goal_state);
+     } else {
+@@ -1381,6 +1399,7 @@ static void ts_parser__recover(
+   SubtreeArray children = array_new();
+   array_reserve(&children, 1);
+   array_push(&children, lookahead);
++  ts_parser__count_summarized(self, children.size);
+   MutableSubtree error_repeat = ts_subtree_new_node(
+     ts_builtin_sym_error_repeat,
+     &children,
+@@ -1409,6 +1428,7 @@ static void ts_parser__recover(
+ 
+     ts_stack_renumber_version(self->stack, array_get(&pop, 0)->version, version);
+     array_push(&array_get(&pop, 0)->subtrees, ts_subtree_from_mut(error_repeat));
++    ts_parser__count_summarized(self, array_get(&pop, 0)->subtrees.size);
+     error_repeat = ts_subtree_new_node(
+       ts_builtin_sym_error_repeat,
+       &array_get(&pop, 0)->subtrees,
+@@ -1542,6 +1562,8 @@ static bool ts_parser__check_progress(TSParser *self, Subtree *lookahead, const
+     self->parse_state.current_byte_offset = *position;
+     self->parse_state.has_error = self->has_error;
+   }
++  self->parse_state.lexed_char_count = self->lexer.advance_count;
++  self->parse_state.summarized_child_count = self->summarized_child_count;
+   if (
+     self->operation_count == 0 &&
+     (self->parse_options.progress_callback && self->parse_options.progress_callback(&self->parse_state))
+@@ -2069,6 +2091,8 @@ void ts_parser_reset(TSParser *self) {
+   self->canceled_balancing = false;
+   self->parse_options = (TSParseOptions) {0};
+   self->parse_state = (TSParseState) {0};
++  self->lexer.advance_count = 0;
++  self->summarized_child_count = 0;
+ }
+ 
+ TSTree *ts_parser_parse(
+-- 
+2.50.1
+

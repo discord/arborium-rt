@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 
 use arborium_highlight::{HtmlFormat, Span, html_escape};
+use arborium_plugin_runtime::FuelSpent;
 use arborium_theme::{tag_for_capture, tag_to_name};
 use arborium_wire::{Utf8Injection, Utf8ParseResult};
 use serde::Serialize;
@@ -30,33 +31,45 @@ use crate::registry::Registry;
 /// value — prevents pathological grammars from blowing the stack.
 const MAX_INJECTION_DEPTH: u32 = 32;
 
-/// Query fuel for one highlight call, shared by the primary parse and every
-/// injected sub-parse beneath it.
+/// Fuel for one highlight call, shared by every parse and every query it
+/// runs: the primary grammar's (the parse ran earlier, in
+/// [`Registry::set_text`], on this same allotment) and every injected
+/// block's beneath it.
 ///
-/// Fuel models the work tree-sitter's query cursor does — cursor operations
-/// weighted by how many candidate matches each one has to touch (see
-/// `arborium_plugin_runtime::FUEL_PER_OPERATION`) — instead of racing a wall
-/// clock. That buys two things a deadline can't:
+/// Fuel models the work tree-sitter does instead of racing a wall clock.
+/// Queries are charged for cursor operations weighted by how many candidate
+/// matches each one has to touch (see
+/// `arborium_plugin_runtime::FUEL_PER_OPERATION`); parses for parser
+/// operations plus the extra work error recovery hides inside them (see
+/// `arborium_plugin_runtime::PARSE_FUEL_PER_OPERATION`). Both are scaled so a
+/// unit of fuel costs about the same time either way, which is what lets
+/// one pool bound both. That buys two things a deadline can't:
 ///
 /// - **Determinism.** The same document always costs the same fuel, on any
 ///   machine. A loaded CPU, a throttled background tab, or a paused
 ///   debugger can't silently shrink the budget and truncate highlights that
 ///   would otherwise render fine, and tests can assert on the cutoff.
-/// - **A per-document ceiling.** One pool covers every query in the call, so
-///   a document is bounded as a whole. Under a per-query budget, a page
-///   holding N injected chain-bomb code blocks costs N × the budget; here
-///   the first blocks drain the pool and the rest are reported as starved.
+/// - **A per-document ceiling.** One pool covers every parse and query in
+///   the call, so a document is bounded as a whole. Under a per-call budget,
+///   a page holding N injected chain-bomb code blocks costs N × the budget;
+///   here the first blocks drain the pool and the rest are reported as
+///   starved. And because parsing draws on the same fixed pool, a large
+///   document can't buy itself more parse time by being large.
 ///
 /// The trade is that fuel bounds work, not seconds — a slower machine takes
 /// longer to burn the pool rather than truncating sooner — so the size is a
-/// calibration against the slowest host we care about. 80e6 measured at
-/// 2–3.5 ms per 1e6 fuel in the browser runtime, i.e. ~200–280 ms of
-/// worst-case highlighting, and it leaves ordinary documents untouched:
-/// ~750 KB of TypeScript costs ~52e6, and the 16 KB kotlin `a.b().b()…`
-/// chain this guard exists for wants ~1.36e9 (17× the pool) so it is cut
-/// off early. `packages/arborium-rt-wasm/test/fuel.test.mts` pins both ends
-/// of that range.
-pub const HIGHLIGHT_FUEL: u32 = 80_000_000;
+/// calibration against the slowest host we care about. In the browser
+/// runtime both kinds of work measured ~2–3 ms per 1e6 fuel on the inputs
+/// that matter, so 110e6 is ~220–330 ms of worst-case highlighting: the 16
+/// KB kotlin `a.b().b()…` query chain bomb is cut off at ~230 ms, a parse
+/// kept in error recovery (repeated kotlin `-}`, which wants ~3e8 by 2 KB
+/// and keeps climbing) at ~250 ms, and recovery that keeps rebuilding one
+/// ERROR node (a 50 KB unterminated javascript template literal, ~7e8) at
+/// ~290 ms. Ordinary documents stay inside it: ~800 KB of TypeScript costs
+/// ~80e6 (~28e6 parsing, ~52e6 querying).
+/// `packages/arborium-rt-wasm/test/fuel.test.mts` and `parse-budget.test.mts`
+/// pin both ends of that range.
+pub const HIGHLIGHT_FUEL: u32 = 110_000_000;
 
 #[derive(Debug)]
 pub enum HighlightError {
@@ -85,22 +98,25 @@ pub struct WireThemedOutput {
     /// registry. JavaScript can use this to auto-load grammars and retry.
     pub missing_injections: Vec<String>,
     /// Language names whose highlighting is incomplete because the call's
-    /// fuel pool ran dry — either the grammar's own query was cut off
-    /// mid-run, or it was an injected block reached after the pool was
-    /// already empty and skipped. Empty when the whole document fit in
-    /// budget. When non-empty, `spans` holds whatever was resolved before
-    /// the pool drained — partial output. Consumers can use this to fall
-    /// back to an alternate highlighter, log a metric tagged by language,
-    /// or surface "interrupted" in UI per-grammar (e.g. "markdown
+    /// fuel pool ([`HIGHLIGHT_FUEL`]) ran dry — the grammar's query was cut
+    /// off mid-run, its parse was abandoned so it had no tree to query, or it
+    /// was an injected block reached after the pool was already empty and
+    /// skipped. Empty when the whole document fit in budget. When non-empty, `spans` holds whatever was
+    /// resolved before the pool drained — partial output. Consumers can use
+    /// this to fall back to an alternate highlighter, log a metric tagged by
+    /// language, or surface "interrupted" in UI per-grammar (e.g. "markdown
     /// highlighting was complete but the injected kotlin block was
     /// truncated"). Sorted; deduplicated.
     pub out_of_fuel_languages: Vec<String>,
-    /// Fuel this call consumed out of [`HIGHLIGHT_FUEL`], summed across the
-    /// primary parse and every injected sub-parse. Deterministic for a given
-    /// document, which makes it usable as a cost metric: track the
+    /// Fuel this call consumed out of [`HIGHLIGHT_FUEL`], summed across every
+    /// parse and query — the primary grammar's (including its parse, run
+    /// earlier by `set_text`) and every injected block's. Deterministic for a
+    /// given document, which makes it usable as a cost metric: track the
     /// distribution to see how much headroom real traffic leaves before
     /// raising or lowering the cap.
     pub fuel_used: u32,
+    /// The part of `fuel_used` spent parsing; the rest went to queries.
+    pub parse_fuel_used: u32,
 }
 
 #[derive(Serialize)]
@@ -113,6 +129,8 @@ pub struct WireHtmlOutput {
     pub out_of_fuel_languages: Vec<String>,
     /// See [`WireThemedOutput::fuel_used`].
     pub fuel_used: u32,
+    /// See [`WireThemedOutput::parse_fuel_used`].
+    pub parse_fuel_used: u32,
 }
 
 pub fn highlight_to_themed_utf16(
@@ -129,6 +147,7 @@ pub fn highlight_to_themed_utf16(
             missing_injections: collected.missing.into_iter().collect(),
             out_of_fuel_languages: sorted(collected.out_of_fuel),
             fuel_used: collected.fuel_used,
+            parse_fuel_used: collected.parse_fuel_used,
         });
     }
     let coalesced = coalesce_by_tag(themed_byte);
@@ -139,6 +158,7 @@ pub fn highlight_to_themed_utf16(
         missing_injections: collected.missing.into_iter().collect(),
         out_of_fuel_languages: sorted(collected.out_of_fuel),
         fuel_used: collected.fuel_used,
+        parse_fuel_used: collected.parse_fuel_used,
     })
 }
 
@@ -163,6 +183,7 @@ pub fn highlight_to_html(
         missing_injections: collected.missing.into_iter().collect(),
         out_of_fuel_languages: sorted(collected.out_of_fuel),
         fuel_used: collected.fuel_used,
+        parse_fuel_used: collected.parse_fuel_used,
     })
 }
 
@@ -180,20 +201,23 @@ fn sorted(set: HashSet<String>) -> Vec<String> {
 /// per-language signals the wire outputs report, and the call's shared fuel
 /// pool.
 ///
-/// One pool spans the whole document: the primary parse takes what it needs
-/// and each injected sub-parse gets whatever is left. Injections are visited
-/// depth-first in document order, so a greedy block starves the ones after
-/// it rather than every block paying its own separate budget.
+/// One pool spans the whole document: the primary parse and query take what
+/// they need and each injected block's parse and query get whatever is
+/// left. Injections are visited depth-first in document order, so a greedy
+/// block starves the ones after it rather than every block paying its own
+/// separate budget.
 struct Collected {
     spans: Vec<Span>,
     /// Injected language names with no grammar in the registry.
     missing: HashSet<String>,
     /// Injected language names cut short or skipped by fuel exhaustion.
     out_of_fuel: HashSet<String>,
-    /// Fuel left to spend on the queries still to come.
+    /// Fuel left to spend on the parses and queries still to come.
     fuel_remaining: u32,
-    /// Fuel spent so far, summed across every query in the call.
+    /// Fuel spent so far, summed across every parse and query in the call.
     fuel_used: u32,
+    /// The part of `fuel_used` spent parsing.
+    parse_fuel_used: u32,
 }
 
 impl Collected {
@@ -204,6 +228,7 @@ impl Collected {
             out_of_fuel: HashSet::new(),
             fuel_remaining: fuel,
             fuel_used: 0,
+            parse_fuel_used: 0,
         }
     }
 
@@ -211,10 +236,23 @@ impl Collected {
         self.fuel_remaining == 0
     }
 
-    /// Book one parse's result: charge its fuel against the pool, record
-    /// `language` as starved if its query was cut off, and take its spans,
-    /// shifted to primary-document offsets. Returns the injections it found,
-    /// for the caller to descend into.
+    /// Charge one parse against the pool. A parse that ran out leaves its
+    /// session without a tree; the query that follows reports that as out of
+    /// fuel, and [`Self::absorb`] records the language then.
+    ///
+    /// Saturating for the same reason as [`Self::absorb`]: the parser can
+    /// overshoot its allotment by up to one tick.
+    fn charge_parse(&mut self, spent: FuelSpent) {
+        self.fuel_remaining = self.fuel_remaining.saturating_sub(spent.used);
+        self.fuel_used = self.fuel_used.saturating_add(spent.used);
+        self.parse_fuel_used = self.parse_fuel_used.saturating_add(spent.used);
+    }
+
+    /// Book one query's result: charge its fuel against the pool, record
+    /// `language` as starved if its query was cut off (or had no tree to run
+    /// on because its parse was), and take its spans, shifted to
+    /// primary-document offsets. Returns the injections it found, for the
+    /// caller to descend into.
     ///
     /// The runtime may overshoot its allotment by up to one tick (a query
     /// cursor is only interruptible at tick boundaries), hence the
@@ -241,8 +279,8 @@ impl Collected {
 }
 
 /// Walk the primary session + injections recursively, spending one shared
-/// fuel pool across every query. Also returns the primary source text, for
-/// HTML emission / UTF-16 conversion.
+/// fuel pool across every parse and query. Also returns the primary source text, for HTML emission /
+/// UTF-16 conversion.
 fn collect_spans(
     reg: &mut Registry,
     session_id: u32,
@@ -262,6 +300,12 @@ fn collect_spans(
             .grammar_mut(primary_gid)
             .ok_or(HighlightError::UnknownSession)?;
         let primary_language = grammar.language_name.clone();
+        // `Registry::set_text` already parsed the primary text, on this same
+        // allotment. Charge what it cost; if it ran out, the query below
+        // comes back empty and out of fuel, and the language is reported.
+        if let Some(spent) = grammar.runtime.parse_fuel(primary_inner) {
+            out.charge_parse(spent);
+        }
         let result = grammar
             .runtime
             .parse_with_fuel(primary_inner, out.fuel_remaining)
@@ -291,12 +335,10 @@ fn process_injections(
 
     let mut injections = injections.into_iter();
     for inj in injections.by_ref() {
-        // Pool drained by an earlier block. Don't even parse the remaining
-        // ranges: `set_text` below runs a full tree-sitter parse, which fuel
-        // doesn't meter, so a document holding hundreds of injected blocks
-        // would keep paying parse cost long after the query budget was gone.
-        // Report the rest as starved instead — their highlighting is missing
-        // for the same reason a cut-off query's is.
+        // Pool drained by an earlier block. Don't even start on the remaining
+        // ranges: there's no fuel to parse them. Report them as starved
+        // instead — their highlighting is missing for the same reason a
+        // cut-off query's is.
         if out.starved() {
             out.out_of_fuel.insert(inj.language);
             out.out_of_fuel.extend(injections.map(|rest| rest.language));
@@ -326,7 +368,13 @@ fn process_injections(
                 continue;
             };
             let temp = grammar.runtime.create_session();
-            grammar.runtime.set_text(temp, &injected_text);
+            let fuel = out.fuel_remaining;
+            let parse_spent = grammar
+                .runtime
+                .set_text_with_fuel(temp, &injected_text, fuel);
+            out.charge_parse(parse_spent);
+            // An out-of-fuel parse leaves no tree, so this comes back empty
+            // and out of fuel, and `absorb` reports the language.
             let result = grammar.runtime.parse_with_fuel(temp, out.fuel_remaining);
             grammar.runtime.free_session(temp);
             match result {

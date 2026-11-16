@@ -134,8 +134,8 @@ it("reports missing injections for unbundled fenced languages", () => {
 // The addon links its own copy of the tree-sitter C runtime (arborium's,
 // compiled by lib/node/build.rs) rather than resolving ts_* against the
 // emscripten host, so the fuel meter has to be verified on this path too:
-// the per-tick charge reads a field the patched query.c publishes, and an
-// unpatched copy would silently mis-meter.
+// the per-tick charges read fields the patched query.c and parser.c publish,
+// and an unpatched copy would silently mis-meter.
 it("bounds a chained-member DoS with the fuel pool", () => {
 	// javascript's member_expression is left-recursive, the same shape that
 	// makes the upstream kotlin highlights query quadratic: `a.b().b()…`
@@ -151,8 +151,8 @@ it("bounds a chained-member DoS with the fuel pool", () => {
 	expect(result.outOfFuelLanguages).toEqual(["javascript"]);
 	// Mirrors HIGHLIGHT_FUEL in src/highlight.rs: spent the pool, stopped
 	// within one tick of it.
-	expect(result.fuelUsed).toBeGreaterThanOrEqual(80_000_000);
-	expect(result.fuelUsed).toBeLessThan(80_000_000 * 1.05);
+	expect(result.fuelUsed).toBeGreaterThanOrEqual(110_000_000);
+	expect(result.fuelUsed).toBeLessThan(110_000_000 * 1.05);
 	expect(elapsed).toBeLessThan(1000);
 });
 
@@ -163,4 +163,8 @@ it("reports fuel deterministically across runs", () => {
 	expect(a.outOfFuelLanguages).toEqual([]);
 	expect(a.fuelUsed).toBeGreaterThan(0);
 	expect(b.fuelUsed).toBe(a.fuelUsed);
+	// Parsing draws on the same pool, so part of `fuelUsed` is the parse.
+	expect(a.parseFuelUsed).toBeGreaterThan(0);
+	expect(a.parseFuelUsed).toBeLessThan(a.fuelUsed);
+	expect(b.parseFuelUsed).toBe(a.parseFuelUsed);
 });

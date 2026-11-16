@@ -40,7 +40,9 @@ export interface Utf16ParseResult {
 	/**
 	 * `true` if the fuel allotted to this parse ran out before the
 	 * QueryCursor finished. `spans` then holds whatever was collected
-	 * before it ran dry — partial output.
+	 * before it ran dry — partial output. Also `true`, with no spans, if
+	 * the session's tree-sitter parse ran out of fuel and left no tree to
+	 * query.
 	 */
 	out_of_fuel: boolean;
 }
@@ -69,18 +71,22 @@ export interface ThemedHighlightResult {
 	missing_injections: string[];
 	/**
 	 * Language names whose highlighting is incomplete because the call's
-	 * fuel pool ran dry — either the grammar's own query was cut off
-	 * mid-run, or it was an injected block reached after the pool was
-	 * already empty and skipped. Empty when the whole document fit in
-	 * budget.
+	 * fuel pool ran dry — the grammar's query was cut off mid-run, its parse
+	 * was abandoned so it had no tree to query, or it was an injected block
+	 * reached after the pool was already empty and skipped. Empty when the
+	 * whole document fit in budget.
 	 */
 	out_of_fuel_languages: string[];
 	/**
-	 * Query fuel this call consumed across the primary parse and every
-	 * injected sub-parse, out of the pipeline's fixed per-call pool.
-	 * Deterministic for a given document, so it works as a cost metric.
+	 * Fuel this call consumed out of the pipeline's fixed per-call pool,
+	 * summed across every parse and query it ran — the primary grammar's
+	 * (including its parse, run earlier by `setText`) and every injected
+	 * block's. Deterministic for a given document, so it works as a cost
+	 * metric.
 	 */
 	fuel_used: number;
+	/** The part of `fuel_used` spent parsing; the rest went to queries. */
+	parse_fuel_used: number;
 }
 
 /** Wire shape of `arborium_rt_highlight_to_html`'s JSON payload. */
@@ -95,6 +101,8 @@ export interface HtmlHighlightResult {
 	out_of_fuel_languages: string[];
 	/** See [`ThemedHighlightResult.fuel_used`]. */
 	fuel_used: number;
+	/** See [`ThemedHighlightResult.parse_fuel_used`]. */
+	parse_fuel_used: number;
 }
 
 /**

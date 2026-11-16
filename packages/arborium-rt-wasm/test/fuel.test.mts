@@ -17,8 +17,10 @@ import {
 // arborium-plugin-runtime meters query work as *fuel* — a cost model of
 // tree-sitter's query-cursor advance loop, charged inside the cursor's
 // progress callback — and arborium-rt gives one highlight call a fixed pool
-// of it (`HIGHLIGHT_FUEL` in src/highlight.rs) to share across the primary
-// parse and every injected sub-parse. The upstream kotlin highlights query
+// of it (`HIGHLIGHT_FUEL` in src/highlight.rs) to share across every parse
+// and query it runs, the primary grammar's and every injected block's.
+// (Parsing is metered in the same fuel; parse-budget.test.mts covers the
+// parse side.) The upstream kotlin highlights query
 // is O(n^2) on deeply chained method calls — `a.b().b().b()…` — and at
 // 16 KB of input the chain-bomb pattern would take ~3 s without the budget.
 //
@@ -28,7 +30,7 @@ import {
 // first.
 
 /** Mirrors `HIGHLIGHT_FUEL` in src/highlight.rs. */
-const HIGHLIGHT_FUEL = 80_000_000;
+const HIGHLIGHT_FUEL = 110_000_000;
 
 /**
  * `depth` chained `.b()` calls, wrapped so no single line is absurdly long
@@ -71,19 +73,19 @@ it("caps query cost on a kotlin chain-method DoS via the fuel pool", async () =>
 
 		// The pipeline surfaces which language(s) ran out of fuel so the
 		// caller can tag metrics by grammar / fall back per-language. This
-		// chain depth costs ~1.36e9 fuel unmetered — ~17x the pool — so it
+		// chain depth costs ~1.36e9 fuel unmetered — ~12x the pool — so it
 		// always runs dry.
 		expect(result.outOfFuelLanguages).toContain("kotlin");
-		// Spent the pool and stopped: never wildly past it, since the cursor
-		// is interruptible every 100 operations.
+		// Spent the pool (its parse first, then the query) and stopped: never
+		// wildly past it, since the cursor is interruptible every 100
+		// operations.
 		expect(result.fuelUsed).toBeGreaterThanOrEqual(HIGHLIGHT_FUEL);
 		expect(result.fuelUsed).toBeLessThan(HIGHLIGHT_FUEL * 1.05);
 
 		// The fuel assertions above are the real check — they hold exactly on
 		// any machine. This is a loose backstop for cost the fuel meter does
-		// not see (the tree-sitter parse itself, span post-processing), with
-		// enough headroom for a slow or loaded CI box: ~170 ms locally,
-		// against ~3 s pre-fix at this depth.
+		// not see (span post-processing), with enough headroom for a slow or
+		// loaded CI box: ~230 ms locally, against ~3 s pre-fix at this depth.
 		expect(elapsed).toBeLessThan(2000);
 	} finally {
 		session.free();
@@ -142,9 +144,9 @@ it("leaves ordinary source files far inside the pool", async () => {
 
 		expect(result.outOfFuelLanguages).toEqual([]);
 		expect(result.spans.length).toBeGreaterThan(10_000);
-		// Measured ~52e6 for this input: under the pool with room to spare,
-		// so ordinary documents several times this size still highlight in
-		// full.
+		// Measured ~80e6 for this input (~28e6 parsing, ~52e6 querying):
+		// under the pool with room to spare. Ordinary documents up to ~1 MB
+		// highlight in full.
 		expect(result.fuelUsed).toBeLessThan(HIGHLIGHT_FUEL * 0.8);
 	} finally {
 		session.free();
