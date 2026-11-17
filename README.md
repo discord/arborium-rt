@@ -82,7 +82,9 @@ for the full consumer API. To use the native Node module instead, see
 ### Prerequisites
 
 - `emcc`
+  - https://emscripten.org/docs/getting_started/downloads.html
 - Rust Nightly
+  - `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
   - `rustup component add rust-src --toolchain nightly`
 - Node >= 22, pnpm >= 9
 - askalono
