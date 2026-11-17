@@ -99,19 +99,6 @@
   ] @keyword.function)
 
 
-; Classes
-(stat_classDef
-  [
-    "class"
-    "end"
-  ] @keyword)
-
-(class_field
-  [
-    "public"
-  ] @keyword)
-
-
 
 ; Operators
 [
@@ -174,6 +161,21 @@
   (identifier) @type)
 
 
+; Classes
+(stat_classDef
+  [
+    "class"
+    "end"
+  ] @keyword)
+
+(class_field
+  [
+    "public"
+  ] @keyword)
+
+(class_field
+  (identifier) @property)
+
 
 ; Builtins
 ((identifier) @constant.builtin
@@ -183,20 +185,21 @@
 "..." @variable.builtin
 
 ((identifier) @module.builtin
-  (#any-of? @module.builtin "_G" "debug" "io" "jit" "math" "os" "package" "string" "table" "utf8"))
+  (#any-of? @module.builtin "_G" "debug" "io" "jit" "math" "os" "package" "string"
+  "table" "utf8" "bit32" "buffer"))
 
 ((identifier) @keyword.coroutine
   (#eq? @keyword.coroutine "coroutine"))
 
 ; Tables
 (field
-  name: (identifier) @variable.member)
+  name: (identifier) @property)
 
 (dot_index_expression
-  field: (identifier) @variable.member)
+  field: (identifier) @property)
 
 (table_type
-  (identifier) @variable.member)
+  (identifier) @property)
 
 (table_constructor
   [
