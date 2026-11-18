@@ -157,6 +157,9 @@
 (type_definition_stat
   name: (identifier) @type.definition)
 
+(generic_type_list
+  (identifier) @type)
+
 (generic_type_list_with_defaults
   (identifier) @type)
 
@@ -181,15 +184,15 @@
 ((identifier) @constant.builtin
   (#eq? @constant.builtin "_VERSION"))
 
-
 "..." @variable.builtin
 
-((identifier) @module.builtin
+((identifier) @constant.builtin @module.builtin
   (#any-of? @module.builtin "_G" "debug" "io" "jit" "math" "os" "package" "string"
-  "table" "utf8" "bit32" "buffer"))
+  "table" "utf8" "bit32" "buffer" "vector"))
 
-((identifier) @keyword.coroutine
-  (#eq? @keyword.coroutine "coroutine"))
+((identifier) @constant.builtin
+  (#eq? @constant.builtin "coroutine"))
+
 
 ; Tables
 (field
@@ -206,6 +209,13 @@
     "{"
     "}"
   ] @constructor)
+
+(table_type
+  access: [
+    "read"
+    "write"
+  ] @tag)
+
 
 ; Functions
 (parameter
@@ -243,14 +253,14 @@
   (identifier) @function.builtin
   ; format-ignore
   (#any-of? @function.builtin
-    ; built-in functions in Lua 5.1
-    "assert" "collectgarbage" "dofile" "error" "getfenv" "getmetatable" "ipairs"
-    "load" "loadfile" "loadstring" "module" "next" "pairs" "pcall" "print"
-    "rawequal" "rawget" "rawlen" "rawset" "require" "select" "setfenv" "setmetatable"
-    "tonumber" "tostring" "type" "unpack" "xpcall" "typeof"
-    "__add" "__band" "__bnot" "__bor" "__bxor" "__call" "__concat" "__div" "__eq" "__gc"
-    "__idiv" "__index" "__le" "__len" "__lt" "__metatable" "__mod" "__mul" "__name" "__newindex"
-    "__pairs" "__pow" "__shl" "__shr" "__sub" "__tostring" "__unm"))
+    ; built-in functions
+    "assert" "collectgarbage" "error" "gcinfo" "getfenv" "getmetatable"
+    "load" "loadfile" "loadstring" "module" "next" "ipairs" "pairs" "pcall" "print"
+    "rawequal" "rawset" "rawget" "rawlen" "require" "select" "setfenv" "setmetatable"
+    "newproxy" "tonumber" "tostring" "type" "typeof" "unpack" "xpcall"
+    "__add" "__call" "__concat" "__div" "__eq" "__gc"
+    "__idiv" "__index" "__le" "__len" "__lt" "__metatable" "__mod" "__mode" "__mul" "__name" "__newindex"
+    "__pairs" "__pow" "__shl" "__shr" "__sub" "__tostring" "__unm" "__iter"))
 
 
 
