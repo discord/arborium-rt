@@ -13,6 +13,9 @@
 	"compatibility_date": "2026-11-01",
 	"workers_dev": true,
 	"preview_urls": true,
+	// `wrangler preview` refuses to run without a `previews` block, even an
+	// empty one. Previews have no bindings to override, so it stays empty.
+	"previews": {},
 	"assets": {
 		"directory": "./dist"
 	}
