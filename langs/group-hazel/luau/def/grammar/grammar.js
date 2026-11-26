@@ -923,10 +923,9 @@ export default grammar({
         "boolean",
         "number",
         "string",
-        "table",
-        "userdata",
         "thread",
         "buffer",
+        "vector",
       ),
 
 
@@ -1044,7 +1043,7 @@ export default grammar({
           $.variadic_type_pack,
         ),
       
-      _type_table_read_write: ($) => choice("read", "write"),
+      _type_table_read_write: ($) => field("access", choice("read", "write")),
       // TableIndexer ::= ['read' | 'write'] '[' Type ']' ':' Type
       _type_table_indexer: ($) =>
         seq(
