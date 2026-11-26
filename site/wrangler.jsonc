@@ -1,0 +1,22 @@
+// Cloudflare Worker that serves the playground. Static assets only: there is
+// no `main` script, so the Worker just serves `dist/` (the `bundle` output).
+//
+// CI deploys it from .github/workflows/build.yml (`deploy-site`): pushes to
+// main run `wrangler deploy`, and same-repo PRs run `wrangler preview --name
+// pr-<n>`. Fork PRs get the same preview from site-preview-fork.yml once a
+// maintainer adds the `deploy-preview` label; that workflow uses the default
+// branch's copy of this file, never the fork's. site-cleanup.yml deletes the
+// preview when the PR closes or a fork PR loses the label. Every deploy downloads `dist/` from the Build `site` job's
+// artifact.
+{
+	"name": "arborium-rt-playground",
+	"compatibility_date": "2026-11-01",
+	"workers_dev": true,
+	"preview_urls": true,
+	// `wrangler preview` refuses to run without a `previews` block, even an
+	// empty one. Previews have no bindings to override, so it stays empty.
+	"previews": {},
+	"assets": {
+		"directory": "./dist"
+	}
+}
